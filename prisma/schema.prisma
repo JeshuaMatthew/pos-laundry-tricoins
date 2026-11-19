@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  OWNER
+  CASHIER
+}
+
+enum ProductCategory {
+  DETERGENT
+  SOFTENER
+  PERFUME
+}
+
+enum PaymentMethod {
+  CASH
+  QRIS
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELLED
+  VOID
+}
+
+enum StockMovementType {
+  IN_RESTOCK
+  OUT_SALE
+  OUT_DAMAGED
+  IN_VOID
+  OPNAME_ADJUSTMENT
+}
+
+enum OpnameStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  username     String   @unique
+  passwordHash String
+  role         Role     @default(CASHIER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  orders          Order[]
+  stockMovements  StockMovement[]
+  createdOpnames  StockOpname[]   @relation("OpnameCreatedBy")
+  approvedOpnames StockOpname[]   @relation("OpnameApprovedBy")
+}
+
+model Service {
+  id          String  @id @default(cuid())
+  name        String
+  price       Int
+  washerCount Int     @default(0)
+  dryerCount  Int     @default(0)
+  maxWeightKg Float?
+  imageUrl    String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  orderServices OrderService[]
+}
+
+model Product {
+  id            String          @id @default(cuid())
+  name          String
+  category      ProductCategory
+  price         Int
+  currentStock  Int             @default(0)
+  minStockAlert Int             @default(10)
+  packName      String?
+  packQty       Int?
+  imageUrl      String?
+  sortOrder     Int             @default(0)
+  isActive      Boolean         @default(true)
+
+  orderProducts  OrderProduct[]
+  stockMovements StockMovement[]
+  opnameItems    StockOpnameItem[]
+}
+
+model Order {
+  id              String        @id @default(cuid())
+  invoiceNumber   String        @unique
+  customerName    String
+  weightKg        Float?
+  totalWasher     Int           @default(0)
+  totalDryer      Int           @default(0)
+  totalAmount     Int
+  paymentMethod   PaymentMethod
+  paymentStatus   PaymentStatus @default(PENDING)
+  cashReceived    Int?
+  cashChange      Int?
+  midtransOrderId String?       @unique
+  qrisString      String?
+  qrisExpiredAt   DateTime?
+  isOnDisplay     Boolean       @default(false)
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  services OrderService[]
+  products OrderProduct[]
+}
+
+model OrderService {
+  id          String @id @default(cuid())
+  orderId     String
+  serviceId   String
+  serviceName String
+  qty         Int
+  unitPrice   Int
+  washerCount Int
+  dryerCount  Int
+  subtotal    Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id])
+}
+
+model OrderProduct {
+  id          String @id @default(cuid())
+  orderId     String
+  productId   String
+  productName String
+  qty         Int
+  unitPrice   Int
+  subtotal    Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model StockMovement {
+  id            String            @id @default(cuid())
+  productId     String
+  type          StockMovementType
+  qtyChange     Int
+  stockBefore   Int
+  stockAfter    Int
+  referenceType String?
+  referenceId   String?
+  notes         String?
+  createdAt     DateTime          @default(now())
+
+  product     Product @relation(fields: [productId], references: [id])
+  createdById String
+  createdBy   User    @relation(fields: [createdById], references: [id])
+}
+
+model StockOpname {
+  id         String       @id @default(cuid())
+  opnameDate DateTime     @default(now())
+  status     OpnameStatus @default(DRAFT)
+  notes      String?
+  approvedAt DateTime?
+
+  createdById  String
+  createdBy    User    @relation("OpnameCreatedBy", fields: [createdById], references: [id])
+  approvedById String?
+  approvedBy   User?   @relation("OpnameApprovedBy", fields: [approvedById], references: [id])
+
+  items StockOpnameItem[]
+}
+
+model StockOpnameItem {
+  id            String  @id @default(cuid())
+  opnameId      String
+  productId     String
+  systemStock   Int
+  physicalStock Int?
+  difference    Int?
+  notes         String?
+
+  opname  StockOpname @relation(fields: [opnameId], references: [id], onDelete: Cascade)
+  product Product     @relation(fields: [productId], references: [id])
+}
