@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -12,6 +12,7 @@ import {
   Package,
   Plus,
   Power,
+  Search,
   Sparkles,
   Trash2,
   Upload,
@@ -45,6 +46,8 @@ interface Movement {
   createdBy: { name: string };
 }
 
+type CategoryFilter = "ALL" | Product["category"];
+
 const CATEGORY_NAMES: Record<Product["category"], string> = {
   DETERGENT: "Deterjen",
   SOFTENER: "Pengharum",
@@ -64,19 +67,18 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [selected, setSelected] = useState<Product | null>(null);
   const [movements, setMovements] = useState<Movement[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("ALL");
 
-  // Menu popup per baris
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
-  // Form Fields Modal
   const [formName, setFormName] = useState("");
   const [formCategory, setFormCategory] = useState<Product["category"]>("DETERGENT");
   const [formPrice, setFormPrice] = useState("1000");
@@ -89,8 +91,8 @@ export default function ProductsPage() {
   const [formIsActive, setFormIsActive] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadError, setUploadError] = useState("");
 
-  // Form Penyesuaian Stok (Sidebar Kanan)
   const [stockAction, setStockAction] = useState<"RESTOCK" | "DAMAGED">("RESTOCK");
   const [stockQty, setStockQty] = useState("");
   const [usePack, setUsePack] = useState(true);
@@ -110,10 +112,23 @@ export default function ProductsPage() {
   }, []);
 
   useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
+    let active = true;
+    fetch("/api/products?all=true")
+      .then(parseJsonSafe)
+      .then((data) => {
+        if (active) setProducts(data.products || []);
+      })
+      .catch(() => {
+        if (active) setErrorMsg("Gagal memuat produk.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  // Tutup popup menu saat klik di luar
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -123,6 +138,16 @@ export default function ProductsPage() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const filteredProducts = useMemo(() => {
+    return products.filter((p) => {
+      if (categoryFilter !== "ALL" && p.category !== categoryFilter) return false;
+      if (searchQuery.trim() && !p.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+  }, [products, categoryFilter, searchQuery]);
 
   async function openHistory(product: Product) {
     setSelected(product);
@@ -147,6 +172,7 @@ export default function ProductsPage() {
     setFormImageUrl("");
     setFormSortOrder(String(products.length + 1));
     setFormIsActive(true);
+    setUploadError("");
     setIsModalOpen(true);
     setActiveMenuId(null);
   }
@@ -162,6 +188,7 @@ export default function ProductsPage() {
     setFormImageUrl(p.imageUrl || "");
     setFormSortOrder(String(p.sortOrder || 0));
     setFormIsActive(p.isActive);
+    setUploadError("");
     setIsModalOpen(true);
     setActiveMenuId(null);
   }
@@ -172,8 +199,10 @@ export default function ProductsPage() {
 
     try {
       setUploadingImage(true);
+      setUploadError("");
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("folder", "products");
 
       const res = await fetch("/api/upload", {
         method: "POST",
@@ -183,9 +212,10 @@ export default function ProductsPage() {
       if (!res.ok) throw new Error(data.error || "Gagal mengupload gambar");
       setFormImageUrl(data.url);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Gagal mengupload gambar");
+      setUploadError(err instanceof Error ? err.message : "Gagal mengupload gambar");
     } finally {
       setUploadingImage(false);
+      e.target.value = "";
     }
   }
 
@@ -226,7 +256,6 @@ export default function ProductsPage() {
 
     try {
       if (editingProduct) {
-        // Edit produk
         const res = await fetch(`/api/products/${editingProduct.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -246,7 +275,6 @@ export default function ProductsPage() {
         if (!res.ok) throw new Error(data.error || "Gagal memperbarui sachet");
         setSuccessMsg(`Sachet "${formName}" berhasil diperbarui.`);
       } else {
-        // Tambah produk baru
         const res = await fetch("/api/products", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -329,7 +357,8 @@ export default function ProductsPage() {
       setStockNotes("");
       setSuccessMsg(`Stok ${selected.name} berhasil diperbarui.`);
       await loadProducts();
-      await openHistory(selected);
+      const updatedSelected = data.product || selected;
+      await openHistory(updatedSelected);
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : "Gagal mengubah stok.");
     }
@@ -337,147 +366,215 @@ export default function ProductsPage() {
 
   return (
     <AppShell ownerOnly>
-      <div className="space-y-6">
-        {/* Pesan Alert */}
+      <div className="space-y-5">
         {successMsg && (
-          <div className="p-3.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center justify-between">
+          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center justify-between animate-content-swap">
             <span className="flex items-center gap-2">
-              <Check className="w-4 h-4" /> {successMsg}
+              <Check className="w-4 h-4 shrink-0" /> {successMsg}
             </span>
-            <button onClick={() => setSuccessMsg("")}>
+            <button type="button" onClick={() => setSuccessMsg("")}>
               <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
         {errorMsg && (
-          <div className="p-3.5 rounded-md bg-red-50 border border-red-200 text-red-700 text-sm flex items-center justify-between">
+          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 text-sm font-medium flex items-center justify-between animate-content-swap">
             <span>{errorMsg}</span>
-            <button onClick={() => setErrorMsg("")}>
+            <button type="button" onClick={() => setErrorMsg("")}>
               <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Kolom Kiri: Tabel Sachet */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Header & Tombol Tambah di Atas Tabel */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-md border border-slate-200 shadow-xs">
-              <div>
-                <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <Package className="w-5 h-5 text-blue-600" />
-                  Stok Sachet & Add-On
-                </h1>
-                <p className="text-xs text-slate-500">
-                  Kelola master deterjen, foto produk, pengharum, parfum, dan urutan kartu kasir
-                </p>
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <h2 className="text-xl font-semibold tracking-tight text-slate-900">
+            Stok Sachet
+          </h2>
+
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-sm text-xs font-semibold shadow-sm shadow-blue-600/20 whitespace-nowrap shrink-0 transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Sachet</span>
+          </button>
+        </div>
+
+        <div className="grid lg:grid-cols-12 gap-5 items-start">
+          {/* Left 8 Cols: Table */}
+          <div className="lg:col-span-8 bg-white rounded-sm border border-slate-200/90 overflow-hidden">
+            {/* Toolbar */}
+            <div className="p-4 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Cari nama sachet..."
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-sm text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition"
+                />
               </div>
 
-              <button
-                onClick={openCreateModal}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-semibold shadow-sm transition"
-              >
-                <Plus className="w-4 h-4" />
-                Tambah Sachet
-              </button>
+              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-sm border border-slate-200/70">
+                {(
+                  [
+                    { id: "ALL", label: "Semua" },
+                    { id: "DETERGENT", label: "Deterjen" },
+                    { id: "SOFTENER", label: "Pengharum" },
+                    { id: "PERFUME", label: "Parfum" },
+                  ] as { id: CategoryFilter; label: string }[]
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setCategoryFilter(tab.id)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-sm whitespace-nowrap transition-all cursor-pointer ${
+                      categoryFilter === tab.id
+                        ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs"
+                        : "text-slate-600 hover:text-blue-700"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="bg-white rounded-md border border-slate-200 overflow-hidden shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-50 text-xs uppercase text-slate-600 border-b border-slate-200">
-                    <tr>
-                      <th className="p-3.5 w-24 text-center">Urutan</th>
-                      <th className="p-3.5">Produk Sachet</th>
-                      <th className="p-3.5">Kategori</th>
-                      <th className="p-3.5">Harga</th>
-                      <th className="p-3.5">Sisa Stok</th>
-                      <th className="p-3.5">Status</th>
-                      <th className="p-3.5 text-right w-24">Aksi</th>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50/70 text-[11px] font-semibold text-slate-500 border-b border-slate-200/80">
+                    <th className="py-3 px-4 w-20 text-center">Urutan</th>
+                    <th className="py-3 px-4">Produk Sachet</th>
+                    <th className="py-3 px-4">Kategori</th>
+                    <th className="py-3 px-4 text-right">Harga</th>
+                    <th className="py-3 px-4 text-right">Sisa Stok</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right w-24">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody
+                  key={categoryFilter}
+                  className="divide-y divide-slate-100 text-[13px]"
+                >
+                  {loading ? (
+                    [0, 1, 2, 3, 4].map((i) => (
+                      <tr key={i}>
+                        <td className="py-3 px-4 text-center"><div className="h-4 w-5 bg-slate-100 rounded-sm mx-auto animate-pulse" /></td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-sm bg-slate-100 animate-pulse shrink-0" />
+                            <div className="space-y-1.5">
+                              <div className="h-3.5 w-28 bg-slate-100 rounded-sm animate-pulse" />
+                              <div className="h-2.5 w-20 bg-slate-100 rounded-sm animate-pulse" />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4"><div className="h-3.5 w-16 bg-slate-100 rounded-sm animate-pulse" /></td>
+                        <td className="py-3 px-4 text-right"><div className="h-3.5 w-14 bg-slate-100 rounded-sm ml-auto animate-pulse" /></td>
+                        <td className="py-3 px-4 text-right"><div className="h-3.5 w-12 bg-slate-100 rounded-sm ml-auto animate-pulse" /></td>
+                        <td className="py-3 px-4"><div className="h-3.5 w-10 bg-slate-100 rounded-sm animate-pulse" /></td>
+                        <td className="py-3 px-4 text-right"><div className="h-7 w-14 bg-slate-100 rounded-sm ml-auto animate-pulse" /></td>
+                      </tr>
+                    ))
+                  ) : filteredProducts.length === 0 ? (
+                    <tr className="animate-content-swap">
+                      <td colSpan={7} className="py-12 px-4 text-center">
+                        <p className="text-sm font-medium text-slate-700">
+                          Belum ada produk sachet yang sesuai
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Klik &quot;Tambah Sachet&quot; untuk menambahkan item baru.
+                        </p>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {products.map((p, idx) => {
+                  ) : (
+                    filteredProducts.map((p, idx) => {
                       const isLow = p.currentStock <= p.minStockAlert;
                       const isSelected = selected?.id === p.id;
+                      const showReorder = categoryFilter === "ALL" && !searchQuery.trim();
 
                       return (
                         <tr
                           key={p.id}
-                          className={`transition ${
-                            isSelected
-                              ? "bg-blue-50/70"
-                              : "hover:bg-slate-50/80"
+                          className={`transition-colors ${
+                            activeMenuId === p.id ? "relative z-30" : ""
+                          } ${
+                            isSelected ? "bg-blue-50/60" : "hover:bg-slate-50/80"
                           }`}
                         >
-                          <td className="p-3.5 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 mr-1">
-                                #{idx + 1}
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <span className="text-xs font-mono text-slate-500 tabular-nums">
+                                {idx + 1}
                               </span>
-                              <div className="flex flex-col">
-                                <button
-                                  type="button"
-                                  disabled={idx === 0}
-                                  onClick={() => handleMoveProduct(idx, "up")}
-                                  className="p-0.5 text-slate-400 hover:text-blue-600 disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
-                                  title="Pindah ke Atas"
-                                >
-                                  <ArrowUp className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={idx === products.length - 1}
-                                  onClick={() => handleMoveProduct(idx, "down")}
-                                  className="p-0.5 text-slate-400 hover:text-blue-600 disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
-                                  title="Pindah ke Bawah"
-                                >
-                                  <ArrowDown className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
+                              {showReorder && (
+                                <div className="flex flex-col">
+                                  <button
+                                    type="button"
+                                    disabled={idx === 0}
+                                    onClick={() => handleMoveProduct(idx, "up")}
+                                    className="p-0.5 text-slate-400 hover:text-blue-600 disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
+                                    title="Pindah ke Atas"
+                                  >
+                                    <ArrowUp className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={idx === products.length - 1}
+                                    onClick={() => handleMoveProduct(idx, "down")}
+                                    className="p-0.5 text-slate-400 hover:text-blue-600 disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
+                                    title="Pindah ke Bawah"
+                                  >
+                                    <ArrowDown className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </td>
-                          <td className="p-3.5">
+                          <td className="py-3 px-4">
                             <div className="flex items-center gap-3">
                               {p.imageUrl ? (
                                 <img
                                   src={p.imageUrl}
                                   alt={p.name}
-                                  className="w-10 h-10 rounded-md object-cover border border-slate-200 shrink-0"
+                                  referrerPolicy="no-referrer"
+                                  className="w-9 h-9 rounded-sm object-cover border border-slate-200 shrink-0"
                                 />
                               ) : (
-                                <div className="w-10 h-10 rounded-md bg-slate-100 flex items-center justify-center text-slate-500 shrink-0 text-sm">
+                                <div className="w-9 h-9 rounded-sm bg-slate-100 flex items-center justify-center shrink-0">
                                   {p.category === "DETERGENT" ? (
-                                    <Droplets className="w-5 h-5 text-blue-600" />
+                                    <Droplets className="w-4 h-4 text-blue-600" />
                                   ) : p.category === "SOFTENER" ? (
-                                    <Sparkles className="w-5 h-5 text-pink-500" />
+                                    <Sparkles className="w-4 h-4 text-pink-500" />
                                   ) : (
-                                    <Package className="w-5 h-5 text-purple-600" />
+                                    <Package className="w-4 h-4 text-indigo-600" />
                                   )}
                                 </div>
                               )}
                               <div>
-                                <div className="font-semibold text-slate-900">{p.name}</div>
+                                <div className="font-medium text-slate-900">{p.name}</div>
                                 {p.packQty && (
-                                  <div className="text-[11px] text-slate-400">
+                                  <div className="text-[11px] text-slate-500 tabular-nums">
                                     1 {p.packName || "Pack"} = {p.packQty} pcs
                                   </div>
                                 )}
                               </div>
                             </div>
                           </td>
-                          <td className="p-3.5">
-                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                              {CATEGORY_NAMES[p.category]}
-                            </span>
+                          <td className="py-3 px-4 text-xs text-slate-600">
+                            {CATEGORY_NAMES[p.category]}
                           </td>
-                          <td className="p-3.5 font-bold text-slate-800">
+                          <td className="py-3 px-4 text-right font-mono font-medium text-slate-900 tabular-nums">
                             {formatRupiah(p.price)}
                           </td>
-                          <td className="p-3.5">
+                          <td className="py-3 px-4 text-right">
                             <div
-                              className={`font-black text-sm ${
+                              className={`font-mono font-semibold tabular-nums ${
                                 p.currentStock <= 0
                                   ? "text-red-600"
                                   : isLow
@@ -488,54 +585,54 @@ export default function ProductsPage() {
                               {p.currentStock} pcs
                             </div>
                             {isLow && (
-                              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                                Menipis
-                              </span>
+                              <div className="text-[11px] text-amber-600 font-medium">
+                                {p.currentStock <= 0 ? "Habis" : "Menipis"}
+                              </div>
                             )}
                           </td>
-                          <td className="p-3.5">
+                          <td className="py-3 px-4">
                             <span
-                              className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold ${
-                                p.isActive
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : "bg-slate-100 text-slate-500"
+                              className={`text-xs font-semibold ${
+                                p.isActive ? "text-emerald-600" : "text-slate-400"
                               }`}
                             >
                               {p.isActive ? "Aktif" : "Nonaktif"}
                             </span>
                           </td>
-                          <td className="p-3.5 text-right relative">
+                          <td className={`py-3 px-4 text-right relative ${activeMenuId === p.id ? "z-30" : ""}`}>
                             <div className="flex items-center justify-end gap-1">
                               <button
+                                type="button"
                                 onClick={() => openHistory(p)}
-                                className={`text-xs px-2.5 py-1 rounded-md font-semibold transition ${
+                                className={`text-xs px-2.5 py-1.5 rounded-sm font-medium transition-all cursor-pointer ${
                                   isSelected
-                                    ? "bg-blue-600 text-white"
-                                    : "bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs"
+                                    : "border border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:text-blue-700"
                                 }`}
-                                title="Lihat Kartu Stok & Restock"
                               >
                                 Stok
                               </button>
 
-                              {/* Tombol ... untuk Menu Aksi */}
                               <button
                                 type="button"
                                 onClick={() =>
                                   setActiveMenuId(activeMenuId === p.id ? null : p.id)
                                 }
-                                className="p-1 rounded-md hover:bg-slate-100 text-slate-500 transition cursor-pointer"
+                                className="p-1.5 rounded-sm hover:bg-slate-100 text-slate-500 transition-colors cursor-pointer"
                                 title="Opsi Sachet"
                               >
                                 <MoreVertical className="w-4 h-4" />
                               </button>
                             </div>
 
-                            {/* Dropdown Menu Aksi */}
                             {activeMenuId === p.id && (
                               <div
                                 ref={menuRef}
-                                className="absolute right-3 top-10 w-44 bg-white rounded-md shadow-xl border border-slate-200 py-1.5 z-40 text-left animate-in fade-in zoom-in-95 duration-100"
+                                className={`absolute right-4 w-44 bg-white rounded-sm shadow-xl border border-slate-200 py-1.5 z-50 text-left ${
+                                  idx >= filteredProducts.length - 2 && filteredProducts.length > 2
+                                    ? "bottom-11"
+                                    : "top-11"
+                                }`}
                               >
                                 <button
                                   type="button"
@@ -543,7 +640,7 @@ export default function ProductsPage() {
                                     setActiveMenuId(null);
                                     openEditModal(p);
                                   }}
-                                  className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-2 text-left"
+                                  className="w-full px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 text-left cursor-pointer"
                                 >
                                   <Edit2 className="w-3.5 h-3.5" />
                                   Edit Sachet
@@ -551,7 +648,7 @@ export default function ProductsPage() {
                                 <button
                                   type="button"
                                   onClick={() => toggleActiveProduct(p)}
-                                  className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 text-left"
+                                  className="w-full px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 text-left cursor-pointer"
                                 >
                                   <Power className="w-3.5 h-3.5" />
                                   {p.isActive ? "Nonaktifkan" : "Aktifkan"}
@@ -560,7 +657,7 @@ export default function ProductsPage() {
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteProduct(p)}
-                                  className="w-full px-3.5 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 flex items-center gap-2 text-left"
+                                  className="w-full px-3.5 py-2 text-xs font-medium text-red-600 hover:bg-red-50 flex items-center gap-2 text-left cursor-pointer"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                   Hapus Sachet
@@ -570,244 +667,248 @@ export default function ProductsPage() {
                           </td>
                         </tr>
                       );
-                    })}
-                    {products.length === 0 && !loading && (
-                      <tr>
-                        <td colSpan={7} className="p-8 text-center text-slate-400 text-sm">
-                          Belum ada produk sachet. Klik "+ Tambah Sachet" di atas.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          {/* Kolom Kanan: Panel Penyesuaian Stok & History */}
-          <div className="bg-white p-5 rounded-md border border-slate-200 shadow-xs space-y-4 h-fit">
+          {/* Right 4 Cols: Stock Inspector */}
+          <aside className="lg:col-span-4 bg-white rounded-sm border border-slate-200/90 overflow-hidden lg:sticky lg:top-20">
+            <div key={selected?.id || "empty"} className="animate-content-swap">
             {!selected ? (
-              <div className="text-center py-12 text-slate-400 space-y-2">
-                <Package className="w-10 h-10 mx-auto text-slate-300 stroke-1" />
-                <p className="text-sm font-medium text-slate-600">Pilih Produk di Tabel</p>
-                <p className="text-xs">
-                  Klik tombol <strong>"Stok"</strong> pada baris tabel untuk menambah restock masuk, mencatat barang rusak, atau melihat kartu mutasi stok.
+              <div className="text-center py-14 px-6 space-y-2">
+                <Package className="w-8 h-8 mx-auto text-slate-300 stroke-[1.5]" />
+                <p className="text-sm font-medium text-slate-700">Pilih produk</p>
+                <p className="text-xs text-slate-500">
+                  Klik <strong>Stok</strong> di tabel untuk mutasi stok.
                 </p>
               </div>
             ) : (
-              <>
-                <div className="flex items-center justify-between pb-3 border-b">
+              <div>
+                <div className="px-5 py-4 border-b border-slate-200/80 flex items-center justify-between gap-2">
                   <div>
-                    <h2 className="font-bold text-sm text-slate-900">{selected.name}</h2>
-                    <span className="text-xs text-slate-500">
-                      Sisa Stok: <strong className="text-blue-600">{selected.currentStock} pcs</strong>
-                    </span>
+                    <h3 className="font-semibold text-sm text-slate-900">{selected.name}</h3>
+                    <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                      Sisa Stok:{" "}
+                      <strong className="font-mono text-slate-900">
+                        {selected.currentStock} pcs
+                      </strong>
+                    </p>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setSelected(null)}
-                    className="p-1 rounded-md hover:bg-slate-100 text-slate-400"
+                    className="p-1.5 rounded-sm hover:bg-slate-100 text-slate-400 cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
-                <form onSubmit={handleStockSubmit} className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setStockAction("RESTOCK")}
-                      className={`py-2 rounded-md text-xs font-bold border transition ${
-                        stockAction === "RESTOCK"
-                          ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
-                          : "border-slate-200 text-slate-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      + Restock Masuk
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setStockAction("DAMAGED")}
-                      className={`py-2 rounded-md text-xs font-bold border transition ${
-                        stockAction === "DAMAGED"
-                          ? "bg-red-600 text-white border-red-600 shadow-xs"
-                          : "border-slate-200 text-slate-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      - Rusak / Bocor
-                    </button>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Jumlah {stockAction === "RESTOCK" ? "Masuk" : "Rusak"}
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      min="1"
-                      value={stockQty}
-                      onChange={(e) => setStockQty(e.target.value)}
-                      placeholder="Contoh: 2"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {stockAction === "RESTOCK" && selected.packQty && (
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer bg-slate-50 p-2.5 rounded-md border border-slate-200">
-                      <input
-                        type="checkbox"
-                        checked={usePack}
-                        onChange={(e) => setUsePack(e.target.checked)}
-                        className="rounded text-blue-600"
-                      />
-                      <span>
-                        Hitung per <strong>{selected.packName || "Pack"}</strong> ({selected.packQty} pcs / pack)
-                      </span>
-                    </label>
-                  )}
-
-                  {/* Preview perubahan stok */}
-                  {stockQty && Number(stockQty) > 0 && (() => {
-                    const inputNum = Number(stockQty);
-                    const pcsChange = stockAction === "RESTOCK" && usePack && selected.packQty
-                      ? inputNum * selected.packQty
-                      : inputNum;
-                    const qtyChange = stockAction === "RESTOCK" ? pcsChange : -pcsChange;
-                    const newStock = selected.currentStock + qtyChange;
-                    const isRestock = stockAction === "RESTOCK";
-                    return (
-                      <div className={`rounded-md px-3 py-2.5 text-xs border flex items-center justify-between gap-2 ${
-                        isRestock
-                          ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                          : "bg-red-50 border-red-200 text-red-800"
-                      }`}>
-                        <div className="space-y-0.5">
-                          <div className="font-semibold">Preview Perubahan</div>
-                          {stockAction === "RESTOCK" && usePack && selected.packQty ? (
-                            <div className="text-[11px] opacity-75">
-                              {inputNum} {selected.packName || "pack"} × {selected.packQty} pcs = <strong>{pcsChange} pcs</strong>
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className={`text-lg font-black ${isRestock ? "text-emerald-700" : "text-red-700"}`}>
-                            {isRestock ? `+${pcsChange}` : `-${pcsChange}`} pcs
-                          </div>
-                          <div className="text-[11px] opacity-70">
-                            {selected.currentStock} → <strong>{Math.max(0, newStock)}</strong>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Catatan (opsional)
-                    </label>
-                    <input
-                      type="text"
-                      value={stockNotes}
-                      onChange={(e) => setStockNotes(e.target.value)}
-                      placeholder="Contoh: Beli dari agen / bocor di rak"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <button className="w-full py-2.5 rounded-md bg-slate-900 hover:bg-black text-white text-xs font-bold shadow-sm transition">
-                    Simpan Perubahan Stok
-                  </button>
-                </form>
-
-                <div className="pt-3 border-t">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                    Kartu Stok Terakhir
-                  </h3>
-                  <div className="space-y-2 max-h-64 overflow-y-auto text-xs pr-1">
-                    {movements.map((m) => (
-                      <div
-                        key={m.id}
-                        className="p-2.5 rounded-md bg-slate-50 border border-slate-100 flex justify-between items-center"
+                <div className="p-5 space-y-5">
+                  <form onSubmit={handleStockSubmit} className="space-y-3.5">
+                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-sm">
+                      <button
+                        type="button"
+                        onClick={() => setStockAction("RESTOCK")}
+                        className={`py-1.5 rounded-sm text-xs font-semibold transition-colors cursor-pointer ${
+                          stockAction === "RESTOCK"
+                            ? "bg-white text-emerald-700 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
                       >
-                        <div>
-                          <div className="font-bold text-slate-900">{m.type}</div>
-                          <div className="text-slate-500">{m.notes || "-"}</div>
-                          <div className="text-[10px] text-slate-400">
-                            {formatDateTime(m.createdAt)} • {m.createdBy.name}
+                        + Restock Masuk
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStockAction("DAMAGED")}
+                        className={`py-1.5 rounded-sm text-xs font-semibold transition-colors cursor-pointer ${
+                          stockAction === "DAMAGED"
+                            ? "bg-white text-red-600 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        - Rusak / Bocor
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Jumlah {stockAction === "RESTOCK" ? "Masuk" : "Rusak"}
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        value={stockQty}
+                        onChange={(e) => setStockQty(e.target.value)}
+                        placeholder="Contoh: 2"
+                        className="w-full px-3.5 py-2 border border-slate-200 rounded-sm text-sm font-mono font-semibold tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+                      />
+                    </div>
+
+                    {stockAction === "RESTOCK" && selected.packQty && (
+                      <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={usePack}
+                          onChange={(e) => setUsePack(e.target.checked)}
+                          className="rounded-sm border-slate-300 text-blue-600"
+                        />
+                        <span>
+                          Hitung per <strong>{selected.packName || "Pack"}</strong> ({selected.packQty} pcs)
+                        </span>
+                      </label>
+                    )}
+
+                    {stockQty && Number(stockQty) > 0 && (() => {
+                      const inputNum = Number(stockQty);
+                      const pcsChange =
+                        stockAction === "RESTOCK" && usePack && selected.packQty
+                          ? inputNum * selected.packQty
+                          : inputNum;
+                      const qtyChange = stockAction === "RESTOCK" ? pcsChange : -pcsChange;
+                      const newStock = selected.currentStock + qtyChange;
+                      const isRestock = stockAction === "RESTOCK";
+                      return (
+                        <div
+                          key={`${stockAction}-${pcsChange}`}
+                          className={`rounded-sm px-3.5 py-2.5 text-xs border flex items-center justify-between gap-2 animate-content-swap ${
+                            isRestock
+                              ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                              : "bg-red-50 border-red-200 text-red-800"
+                          }`}
+                        >
+                          <div>
+                            <div className="font-semibold">Preview Mutasi</div>
+                            {stockAction === "RESTOCK" && usePack && selected.packQty ? (
+                              <div className="text-[11px] opacity-80 tabular-nums">
+                                {inputNum} {selected.packName || "pack"} × {selected.packQty} pcs
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="text-right font-mono tabular-nums">
+                            <div className="text-sm font-semibold">
+                              {isRestock ? `+${pcsChange}` : `-${pcsChange}`} pcs
+                            </div>
+                            <div className="text-[11px] opacity-75">
+                              {selected.currentStock} → {Math.max(0, newStock)}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <span
-                            className={`font-black text-xs ${
-                              m.qtyChange > 0 ? "text-emerald-600" : "text-red-600"
-                            }`}
-                          >
-                            {m.qtyChange > 0 ? `+${m.qtyChange}` : m.qtyChange}
-                          </span>
-                          <div className="text-[10px] text-slate-500">Sisa: {m.stockAfter}</div>
+                      );
+                    })()}
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Catatan (opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={stockNotes}
+                        onChange={(e) => setStockNotes(e.target.value)}
+                        placeholder="Contoh: Beli dari agen / bocor di rak"
+                        className="w-full px-3.5 py-2 border border-slate-200 rounded-sm text-xs focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-2.5 rounded-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-semibold shadow-sm shadow-blue-600/20 transition-all cursor-pointer"
+                    >
+                      Simpan Perubahan Stok
+                    </button>
+                  </form>
+
+                  <div className="pt-4 border-t border-slate-200/80">
+                    <h4 className="text-xs font-semibold text-slate-700 mb-3">
+                      Riwayat Mutasi Terakhir
+                    </h4>
+                    <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto pr-1 text-xs">
+                      {movements.map((m) => (
+                        <div key={m.id} className="py-2.5 first:pt-0 last:pb-0 flex justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-medium text-slate-900">{m.type}</div>
+                            <div className="text-slate-500 truncate">{m.notes || "-"}</div>
+                            <div className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                              {formatDateTime(m.createdAt)} · {m.createdBy.name}
+                            </div>
+                          </div>
+                          <div className="text-right font-mono tabular-nums shrink-0">
+                            <span
+                              className={`font-semibold ${
+                                m.qtyChange > 0 ? "text-emerald-600" : "text-red-600"
+                              }`}
+                            >
+                              {m.qtyChange > 0 ? `+${m.qtyChange}` : m.qtyChange}
+                            </span>
+                            <div className="text-[11px] text-slate-500">Sisa: {m.stockAfter}</div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {movements.length === 0 && (
-                      <p className="text-center text-slate-400 py-4 text-xs">
-                        Belum ada riwayat pergerakan stok.
-                      </p>
-                    )}
+                      ))}
+                      {movements.length === 0 && (
+                        <p className="text-center text-slate-400 py-4 text-xs">
+                          Belum ada riwayat pergerakan stok.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </>
+              </div>
             )}
-          </div>
+            </div>
+          </aside>
         </div>
 
-        {/* MODAL TAMBAH / EDIT SACHET */}
+        {/* Create / Edit Modal */}
         {isModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-            <div className="bg-white rounded-md max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-[1px] flex items-center justify-center p-4 z-50 animate-backdrop-enter">
+            <div className="bg-white rounded-sm max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto animate-modal-enter">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="font-bold text-base text-slate-900">
+                <h3 className="font-semibold text-base text-slate-900">
                   {editingProduct ? "Edit Sachet" : "Tambah Sachet Baru"}
                 </h3>
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+                  className="p-1 rounded-sm hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
               <form onSubmit={handleSaveProduct} className="space-y-3.5">
-                {/* Upload Gambar Sachet */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                     Foto / Gambar Sachet
                   </label>
                   <div className="flex items-center gap-3">
                     {formImageUrl ? (
-                      <div className="relative group shrink-0">
+                      <div className="relative shrink-0">
                         <img
                           src={formImageUrl}
                           alt="Preview"
-                          className="w-16 h-16 rounded-md object-cover border border-slate-200"
+                          referrerPolicy="no-referrer"
+                          className="w-16 h-16 rounded-sm object-cover border border-slate-200"
                         />
                         <button
                           type="button"
                           onClick={() => setFormImageUrl("")}
-                          className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-full p-1 shadow-sm hover:bg-red-700"
+                          className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-sm p-1 hover:bg-red-700 cursor-pointer"
                           title="Hapus Gambar"
                         >
                           <X className="w-3 h-3" />
                         </button>
                       </div>
                     ) : (
-                      <div className="w-16 h-16 rounded-md border-2 border-dashed border-slate-300 flex flex-col items-center justify-center text-slate-400 shrink-0">
-                        <ImageIcon className="w-6 h-6 text-slate-300" />
+                      <div className="w-16 h-16 rounded-sm border border-dashed border-slate-300 flex items-center justify-center text-slate-400 shrink-0">
+                        <ImageIcon className="w-5 h-5 text-slate-300" />
                       </div>
                     )}
 
                     <div className="flex-1 space-y-1.5">
-                      <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-md cursor-pointer transition">
+                      <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-sm cursor-pointer transition-colors">
                         <Upload className="w-3.5 h-3.5" />
                         {uploadingImage ? "Mengupload..." : "Upload File Gambar"}
                         <input
@@ -823,14 +924,19 @@ export default function ProductsPage() {
                         value={formImageUrl}
                         onChange={(e) => setFormImageUrl(e.target.value)}
                         placeholder="Atau tempel URL gambar di sini"
-                        className="w-full px-2.5 py-1.5 border border-slate-200 rounded-md text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                        className="w-full px-3 py-1.5 border border-slate-200 rounded-sm text-xs focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                       />
                     </div>
                   </div>
+                  {uploadError && (
+                    <p className="text-[11px] text-red-600 font-medium mt-1.5">
+                      {uploadError}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Nama Sachet <span className="text-red-500">*</span>
                   </label>
                   <input
@@ -839,13 +945,13 @@ export default function ProductsPage() {
                     value={formName}
                     onChange={(e) => setFormName(e.target.value)}
                     placeholder="Contoh: Soklin Liquid 1K"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    className="w-full px-3.5 py-2 border border-slate-200 rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Kategori <span className="text-red-500">*</span>
                     </label>
                     <select
@@ -853,7 +959,7 @@ export default function ProductsPage() {
                       onChange={(e) =>
                         setFormCategory(e.target.value as Product["category"])
                       }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     >
                       <option value="DETERGENT">Deterjen</option>
                       <option value="SOFTENER">Pengharum</option>
@@ -862,8 +968,8 @@ export default function ProductsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Nomor Urutan Tampilan
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Urutan Tampilan
                     </label>
                     <input
                       type="number"
@@ -871,14 +977,14 @@ export default function ProductsPage() {
                       value={formSortOrder}
                       onChange={(e) => setFormSortOrder(e.target.value)}
                       placeholder="1"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Harga Satuan (Rp) <span className="text-red-500">*</span>
                     </label>
                     <input
@@ -888,13 +994,13 @@ export default function ProductsPage() {
                       step="500"
                       value={formPrice}
                       onChange={(e) => setFormPrice(e.target.value)}
-                      placeholder="Contoh: 1000"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="1000"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Batas Min. Alert (pcs)
                     </label>
                     <input
@@ -902,15 +1008,15 @@ export default function ProductsPage() {
                       min="1"
                       value={formMinStock}
                       onChange={(e) => setFormMinStock(e.target.value)}
-                      placeholder="Contoh: 10"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="10"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     />
                   </div>
                 </div>
 
                 {!editingProduct && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Stok Awal (pcs)
                     </label>
                     <input
@@ -918,27 +1024,27 @@ export default function ProductsPage() {
                       min="0"
                       value={formInitialStock}
                       onChange={(e) => setFormInitialStock(e.target.value)}
-                      placeholder="Contoh: 24"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="24"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     />
                   </div>
                 )}
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Satuan Grosir / Pack
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Satuan Pack
                     </label>
                     <input
                       type="text"
                       value={formPackName}
                       onChange={(e) => setFormPackName(e.target.value)}
-                      placeholder="Contoh: Renceng"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="Renceng"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Isi per Pack (pcs)
                     </label>
                     <input
@@ -946,19 +1052,19 @@ export default function ProductsPage() {
                       min="1"
                       value={formPackQty}
                       onChange={(e) => setFormPackQty(e.target.value)}
-                      placeholder="Contoh: 12"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="12"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-sm text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                     />
                   </div>
                 </div>
 
                 {editingProduct && (
-                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 pt-1 cursor-pointer">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-700 pt-1 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={formIsActive}
                       onChange={(e) => setFormIsActive(e.target.checked)}
-                      className="rounded text-blue-600 focus:ring-blue-500"
+                      className="rounded-sm border-slate-300 text-blue-600"
                     />
                     Status Sachet Aktif (Tampil di Kasir POS)
                   </label>
@@ -968,14 +1074,14 @@ export default function ProductsPage() {
                   <button
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="px-4 py-2 border border-slate-300 rounded-md text-sm font-semibold text-slate-600 hover:bg-slate-50 transition"
+                    className="px-4 py-2 border border-slate-200 rounded-sm text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
                     disabled={submitting || uploadingImage}
-                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-semibold shadow-sm transition disabled:opacity-50"
+                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-sm text-xs font-semibold shadow-sm shadow-blue-600/20 transition-all disabled:opacity-50 cursor-pointer"
                   >
                     {submitting ? "Menyimpan..." : "Simpan Sachet"}
                   </button>

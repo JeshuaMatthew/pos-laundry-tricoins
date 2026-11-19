@@ -57,6 +57,8 @@ interface ServiceConfig {
   value: string;
 }
 
+type ProductFilter = "ALL" | Product["category"];
+
 const CATEGORY_LABEL: Record<Product["category"], string> = {
   DETERGENT: "Deterjen",
   SOFTENER: "Pengharum",
@@ -77,7 +79,7 @@ function formatMachineLabel(washer: number, dryer: number) {
   const parts: string[] = [];
   if (washer > 0) parts.push(`${washer} Washer`);
   if (dryer > 0) parts.push(`${dryer} Dryer`);
-  return parts.length > 0 ? parts.join(" + ") : "Mesin";
+  return parts.length > 0 ? parts.join(" · ") : "Mesin";
 }
 
 function calculateServiceMetrics(s: Service, config: ServiceConfig | undefined) {
@@ -113,9 +115,9 @@ function calculateServiceMetrics(s: Service, config: ServiceConfig | undefined) 
         s.dryerCount * multiplier
       );
       if (multiplier === 1) {
-        explanation = `Berat ${rawNum} kg (≤ ${maxKg} kg) → 1x (${machineText})`;
+        explanation = `${rawNum} kg (≤ ${maxKg} kg) · 1x (${machineText})`;
       } else {
-        explanation = `Berat ${rawNum} kg (> ${(multiplier - 1) * maxKg} kg) → ${multiplier}x (${machineText})`;
+        explanation = `${rawNum} kg (> ${(multiplier - 1) * maxKg} kg) · ${multiplier}x (${machineText})`;
       }
     }
   } else if (category === "SPREI") {
@@ -130,7 +132,7 @@ function calculateServiceMetrics(s: Service, config: ServiceConfig | undefined) 
         s.washerCount * multiplier,
         s.dryerCount * multiplier
       );
-      explanation = `${pcs} sprei → ${multiplier}x (${machineText})`;
+      explanation = `${pcs} sprei · ${multiplier}x (${machineText})`;
     }
   } else if (category === "SELIMUT_BESAR") {
     const pcs = Math.floor(rawNum);
@@ -144,7 +146,7 @@ function calculateServiceMetrics(s: Service, config: ServiceConfig | undefined) 
         s.washerCount * multiplier,
         s.dryerCount * multiplier
       );
-      explanation = `${pcs} selimut besar → ${multiplier}x (${machineText})`;
+      explanation = `${pcs} selimut besar · ${multiplier}x (${machineText})`;
     }
   } else {
     const pcs = Math.floor(rawNum);
@@ -158,7 +160,7 @@ function calculateServiceMetrics(s: Service, config: ServiceConfig | undefined) 
         s.washerCount * multiplier,
         s.dryerCount * multiplier
       );
-      explanation = `${pcs} selimut kecil → ${multiplier}x (${machineText}, maks 2/mesin)`;
+      explanation = `${pcs} selimut kecil · ${multiplier}x (${machineText}, maks 2/mesin)`;
     }
   }
 
@@ -186,6 +188,7 @@ async function safeJsonParse(res: Response) {
 export default function PosPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [productFilter, setProductFilter] = useState<ProductFilter>("ALL");
   const [customerName, setCustomerName] = useState("");
 
   const [serviceConfigs, setServiceConfigs] = useState<Record<string, ServiceConfig>>({});
@@ -194,6 +197,7 @@ export default function PosPage() {
   const [paymentMethod, setPaymentMethod] = useState<"CASH" | "QRIS">("QRIS");
   const [cashReceived, setCashReceived] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [pendingQris, setPendingQris] = useState<PendingQrisOrder | null>(null);
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -216,8 +220,25 @@ export default function PosPage() {
   }, []);
 
   useEffect(() => {
-    loadMasterData();
-  }, [loadMasterData]);
+    let active = true;
+    Promise.all([fetch("/api/services"), fetch("/api/products")])
+      .then(async ([svcRes, prodRes]) => {
+        if (!active) return;
+        const svcData = await safeJsonParse(svcRes);
+        const prodData = await safeJsonParse(prodRes);
+        const svcList = Array.isArray(svcData.services) ? svcData.services : [];
+        const prodList = Array.isArray(prodData.products) ? prodData.products : [];
+        setServices(svcList.sort((a: Service, b: Service) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+        setProducts(prodList.sort((a: Product, b: Product) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+      })
+      .catch((err) => console.error("Gagal memuat master data POS:", err))
+      .finally(() => {
+        if (active) setInitialLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const resetCart = useCallback(() => {
     setCustomerName("");
@@ -226,7 +247,6 @@ export default function PosPage() {
     setCashReceived("");
   }, []);
 
-  // Dengarkan Pusher jika QRIS yang sedang menunggu ternyata sudah dibayar
   useEffect(() => {
     if (!pendingQris) return;
 
@@ -292,6 +312,11 @@ export default function PosPage() {
     });
   }
 
+  const filteredProducts = useMemo(() => {
+    if (productFilter === "ALL") return products;
+    return products.filter((p) => p.category === productFilter);
+  }, [products, productFilter]);
+
   const summary = useMemo(() => {
     let totalAmount = 0;
     let totalWasher = 0;
@@ -348,7 +373,6 @@ export default function PosPage() {
   const cashNum = Number(cashReceived || 0);
   const cashChange = cashNum - summary.totalAmount;
 
-  // Sinkronisasi otomatis ringkasan transaksi ke Layar Pelanggan (Customer Display)
   useEffect(() => {
     const hasItems = summary.totalAmount > 0 || customerName.trim().length > 0;
     const cartPayload = hasItems
@@ -378,7 +402,6 @@ export default function PosPage() {
         }
       : null;
 
-    // 1. Sinkronisasi instan via BroadcastChannel (untuk multi-layar / tab di perangkat yang sama)
     try {
       if (typeof window !== "undefined" && "BroadcastChannel" in window) {
         const bc = new BroadcastChannel("tricoins-pos-sync");
@@ -386,10 +409,9 @@ export default function PosPage() {
         bc.close();
       }
     } catch {
-      // Abaikan jika tidak didukung
+      // Ignore if unsupported
     }
 
-    // 2. Sinkronisasi via HTTP API + Pusher (untuk tablet pelanggan / perangkat eksternal)
     const timer = setTimeout(() => {
       fetch("/api/customer-display/cart", {
         method: "POST",
@@ -517,7 +539,7 @@ export default function PosPage() {
     try {
       await fetch(`/api/orders/${pendingQris.id}/cancel`, { method: "POST" });
     } catch {
-      // Abaikan jika network error
+      // Ignore network error
     }
     setPendingQris(null);
     setErrorMsg("QRIS dibatalkan. Anda bisa ganti ke Cash atau buat ulang.");
@@ -525,591 +547,654 @@ export default function PosPage() {
 
   return (
     <AppShell>
-      {successMsg && (
-        <div className="mb-4 p-3 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center justify-between text-sm font-medium">
-          <span className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" /> {successMsg}
-          </span>
-          <button onClick={() => setSuccessMsg("")}>
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {errorMsg && (
-        <div className="mb-4 p-3 rounded-md bg-red-50 border border-red-200 text-red-700 flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" /> {errorMsg}
-          </span>
-          <button onClick={() => setErrorMsg("")}>
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {pendingQris && (
-        <div className="mb-4 p-4 rounded-md bg-blue-50 border border-blue-200 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="font-bold text-blue-900">
-              QRIS sedang tampil di Layar Pelanggan ({pendingQris.invoiceNumber})
-            </p>
-            <p className="text-sm text-blue-700">
-              {pendingQris.customerName} • Total:{" "}
-              <strong>{formatRupiah(pendingQris.totalAmount)}</strong> • Menunggu scan...
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCheckStatus}
-              className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
-            >
-              Cek Status Midtrans
-            </button>
-            <button
-              onClick={handleCancelQris}
-              className="px-3 py-1.5 bg-white border border-red-300 text-red-600 rounded-md text-sm font-medium hover:bg-red-50"
-            >
-              Batalkan / Ganti Cash
+      <div className="space-y-5">
+        {successMsg && (
+          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center justify-between text-sm font-medium animate-content-swap">
+            <span className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              {successMsg}
+            </span>
+            <button type="button" onClick={() => setSuccessMsg("")} className="p-1 text-emerald-700 hover:text-emerald-900">
+              <X className="w-4 h-4" />
             </button>
           </div>
-        </div>
-      )}
+        )}
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Kolom Kiri: Layanan Berbasis Berat & Sachet */}
-        <div className="lg:col-span-2 space-y-6">
+        {errorMsg && (
+          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 flex items-center justify-between text-sm font-medium animate-content-swap">
+            <span className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+              {errorMsg}
+            </span>
+            <button type="button" onClick={() => setErrorMsg("")} className="p-1 text-red-600 hover:text-red-800">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
-          {/* 1. Daftar Layanan Mesin */}
-          <div className="space-y-3">
-            <h2 className="font-bold text-slate-900 text-base">
-              1. Pilih Layanan Mesin
-            </h2>
+        {pendingQris && (
+          <div className="p-4 rounded-sm bg-gradient-to-r from-blue-50 to-indigo-50/70 border border-blue-200 flex flex-wrap items-center justify-between gap-4 animate-content-swap">
+            <div>
+              <p className="font-semibold text-sm text-slate-900">
+                Menunggu Pembayaran QRIS ·{" "}
+                <span className="font-mono text-blue-600">{pendingQris.invoiceNumber}</span>
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                {pendingQris.customerName} · Total{" "}
+                <strong className="text-slate-900">{formatRupiah(pendingQris.totalAmount)}</strong> · Ditampilkan di Layar Pelanggan
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCheckStatus}
+                className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-sm text-xs font-semibold shadow-sm shadow-blue-600/20 transition-all cursor-pointer"
+              >
+                Cek Status Midtrans
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelQris}
+                className="px-3.5 py-2 bg-white border border-slate-200 text-red-600 rounded-sm text-xs font-semibold hover:bg-red-50 transition-colors cursor-pointer"
+              >
+                Batalkan / Ganti Cash
+              </button>
+            </div>
+          </div>
+        )}
 
-            <div className="grid sm:grid-cols-2 gap-3.5">
-              {services.map((s) => {
-                const config = serviceConfigs[s.id];
-                const metrics = calculateServiceMetrics(s, config);
-                const category = getServiceCategory(s.name);
-                const maxKg = s.maxWeightKg && s.maxWeightKg > 0 ? s.maxWeightKg : 8;
+        <div className="grid lg:grid-cols-12 gap-6 items-start">
+          {/* Left 8 Columns: Services + Add-On Products */}
+          <div className="lg:col-span-8 space-y-6">
+            {/* Section 1: Services */}
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-slate-900">
+                  1. Layanan Mesin
+                </h2>
+                <span className="text-xs text-slate-500 tabular-nums">
+                  {services.length} layanan
+                </span>
+              </div>
 
-                return (
-                  <div
-                    key={s.id}
-                    className={`rounded-md border transition overflow-hidden bg-white ${
-                      metrics.isSelected
-                        ? "border-blue-500 ring-2 ring-blue-500/20 shadow-md"
-                        : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
-                    }`}
-                  >
+              <div className="grid sm:grid-cols-2 gap-3.5">
+                {initialLoading ? (
+                  [0, 1, 2, 3].map((idx) => (
                     <div
-                      onClick={() => toggleService(s)}
-                      className="p-3.5 cursor-pointer flex items-center justify-between gap-3 select-none"
+                      key={idx}
+                      className="rounded-sm border border-slate-200/90 bg-white p-4 flex items-center justify-between gap-3"
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        {s.imageUrl ? (
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className="w-11 h-11 rounded-sm bg-slate-100 animate-pulse shrink-0" />
+                        <div className="space-y-2">
+                          <div className="h-3.5 w-32 bg-slate-100 rounded-sm animate-pulse" />
+                          <div className="h-3 w-24 bg-slate-100 rounded-sm animate-pulse" />
+                        </div>
+                      </div>
+                      <div className="w-5 h-5 rounded-sm bg-slate-100 animate-pulse shrink-0" />
+                    </div>
+                  ))
+                ) : (
+                  services.map((s) => {
+                  const config = serviceConfigs[s.id];
+                  const metrics = calculateServiceMetrics(s, config);
+                  const category = getServiceCategory(s.name);
+                  const maxKg = s.maxWeightKg && s.maxWeightKg > 0 ? s.maxWeightKg : 8;
+
+                  return (
+                    <div
+                      key={s.id}
+                      className={`rounded-sm border bg-white overflow-hidden transition-colors duration-150 ${
+                        metrics.isSelected
+                          ? "border-blue-600 ring-2 ring-blue-600/15"
+                          : "border-slate-200/90 hover:border-slate-300"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleService(s)}
+                        className="w-full p-4 flex items-center justify-between gap-3 text-left cursor-pointer"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          {s.imageUrl ? (
+                            <img
+                              src={s.imageUrl}
+                              alt={s.name}
+                              referrerPolicy="no-referrer"
+                              className="w-11 h-11 rounded-sm object-cover border border-slate-200 shrink-0"
+                            />
+                          ) : (
+                            <div
+                              className={`w-11 h-11 rounded-sm flex items-center justify-center shrink-0 transition-all ${
+                                metrics.isSelected
+                                  ? "bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-xs"
+                                  : "bg-blue-50/70 text-blue-600"
+                              }`}
+                            >
+                              <Shirt className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-slate-900 truncate">
+                              {s.name}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-0.5 truncate tabular-nums">
+                              <span className="font-mono font-semibold text-slate-800">
+                                {formatRupiah(s.price)}
+                              </span>
+                              <span className="mx-1.5 text-slate-300">·</span>
+                              {category === "WEIGHT_BASED"
+                                ? `Maks ${maxKg} kg`
+                                : formatMachineLabel(s.washerCount, s.dryerCount)}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`w-5 h-5 rounded-sm border flex items-center justify-center shrink-0 transition-all ${
+                            metrics.isSelected
+                              ? "bg-gradient-to-br from-blue-600 to-indigo-600 border-blue-600 text-white"
+                              : "border-slate-300 bg-white"
+                          }`}
+                        >
+                          {metrics.isSelected && <Check className="w-3.5 h-3.5" />}
+                        </div>
+                      </button>
+
+                      <div
+                        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                          metrics.isSelected
+                            ? "grid-rows-[1fr] opacity-100"
+                            : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                        }`}
+                        aria-hidden={!metrics.isSelected}
+                      >
+                        <div className="overflow-hidden">
+                          <div className="p-4 bg-slate-50/80 border-t border-slate-200/80 space-y-3">
+                            {category === "WEIGHT_BASED" ? (
+                              <div className="space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                                    <Scale className="w-3.5 h-3.5 text-blue-600" />
+                                    Berat kain (kg)
+                                  </label>
+                                  <button
+                                    type="button"
+                                    tabIndex={metrics.isSelected ? 0 : -1}
+                                    onClick={() => toggleService(s)}
+                                    className="text-xs text-red-600 hover:underline font-medium cursor-pointer"
+                                  >
+                                    Hapus
+                                  </button>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0.1"
+                                    tabIndex={metrics.isSelected ? 0 : -1}
+                                    onFocus={(e) => e.target.select()}
+                                    value={config?.value || ""}
+                                    onChange={(e) => updateServiceValue(s.id, e.target.value)}
+                                    placeholder="Contoh: 10.5"
+                                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-sm text-sm font-mono font-semibold text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition"
+                                  />
+                                  <span className="text-xs font-semibold text-slate-500 px-2">
+                                    kg
+                                  </span>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {[5, 8, 10, 12, 16, 20].map((kg) => (
+                                    <button
+                                      key={kg}
+                                      type="button"
+                                      tabIndex={metrics.isSelected ? 0 : -1}
+                                      onClick={() => updateServiceValue(s.id, String(kg))}
+                                      className={`text-[11px] font-mono font-medium px-2.5 py-1 rounded-sm border transition-all cursor-pointer tabular-nums ${
+                                        Number(config?.value) === kg
+                                          ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-transparent shadow-xs"
+                                          : "bg-white hover:bg-blue-50/70 border-slate-200 text-slate-700"
+                                      }`}
+                                    >
+                                      {kg} kg
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-xs font-semibold text-slate-700">
+                                    {category === "SPREI"
+                                      ? "Jumlah lembar sprei (1 mesin / sprei)"
+                                      : category === "SELIMUT_BESAR"
+                                      ? "Jumlah selimut besar (1 mesin / selimut)"
+                                      : "Jumlah selimut kecil (maks 2 / mesin)"}
+                                  </label>
+                                  <button
+                                    type="button"
+                                    tabIndex={metrics.isSelected ? 0 : -1}
+                                    onClick={() => toggleService(s)}
+                                    className="text-xs text-red-600 hover:underline font-medium cursor-pointer"
+                                  >
+                                    Hapus
+                                  </button>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    tabIndex={metrics.isSelected ? 0 : -1}
+                                    onClick={() =>
+                                      updateServiceValue(
+                                        s.id,
+                                        String(Math.max(1, Number(config?.value || 1) - 1))
+                                      )
+                                    }
+                                    className="p-2 rounded-sm bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 cursor-pointer transition-colors"
+                                  >
+                                    <Minus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    tabIndex={metrics.isSelected ? 0 : -1}
+                                    value={config?.value || ""}
+                                    onChange={(e) => updateServiceValue(s.id, e.target.value)}
+                                    className="w-20 text-center px-2 py-1.5 bg-white border border-slate-200 rounded-sm text-sm font-mono font-semibold text-slate-900 tabular-nums transition"
+                                  />
+                                  <button
+                                    type="button"
+                                    tabIndex={metrics.isSelected ? 0 : -1}
+                                    onClick={() =>
+                                      updateServiceValue(
+                                        s.id,
+                                        String(Number(config?.value || 0) + 1)
+                                      )
+                                    }
+                                    className="p-2 rounded-sm bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 cursor-pointer transition-colors"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <span className="text-xs text-slate-500">lembar</span>
+                                </div>
+                              </div>
+                            )}
+
+                            <div
+                              key={`${metrics.explanation}-${metrics.subtotal}`}
+                              className="pt-2.5 border-t border-slate-200/70 flex items-center justify-between gap-2 text-xs animate-content-swap"
+                            >
+                              <span className="text-slate-600">{metrics.explanation}</span>
+                              <span className="font-mono font-semibold text-blue-600 tabular-nums shrink-0">
+                                {formatRupiah(metrics.subtotal)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                  })
+                )}
+              </div>
+            </section>
+
+            {/* Section 2: Add-On Products */}
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-base font-semibold text-slate-900">
+                  2. Add-On Sachet
+                </h2>
+
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-sm border border-slate-200/70">
+                  {(
+                    [
+                      { id: "ALL", label: "Semua" },
+                      { id: "DETERGENT", label: "Deterjen" },
+                      { id: "SOFTENER", label: "Pengharum" },
+                      { id: "PERFUME", label: "Parfum" },
+                    ] as { id: ProductFilter; label: string }[]
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setProductFilter(tab.id)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-sm whitespace-nowrap transition-all cursor-pointer ${
+                        productFilter === tab.id
+                          ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs"
+                          : "text-slate-600 hover:text-blue-700"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div
+                key={productFilter}
+                className="grid sm:grid-cols-2 md:grid-cols-3 gap-3.5 animate-content-swap"
+              >
+                {initialLoading ? (
+                  [0, 1, 2, 3, 4, 5].map((idx) => (
+                    <div
+                      key={idx}
+                      className="p-4 rounded-sm border border-slate-200/90 bg-white flex flex-col justify-between gap-3"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-11 h-11 rounded-sm bg-slate-100 animate-pulse shrink-0" />
+                        <div className="flex-1 space-y-1.5">
+                          <div className="h-2.5 w-20 bg-slate-100 rounded-sm animate-pulse" />
+                          <div className="h-3.5 w-28 bg-slate-100 rounded-sm animate-pulse" />
+                          <div className="h-3 w-16 bg-slate-100 rounded-sm animate-pulse" />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <div className="h-3 w-12 bg-slate-100 rounded-sm animate-pulse" />
+                        <div className="w-7 h-7 rounded-sm bg-slate-100 animate-pulse" />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  filteredProducts.map((p) => {
+                  const qty = productCart[p.id] || 0;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`p-4 rounded-sm border bg-white flex flex-col justify-between gap-3 transition-all duration-150 ${
+                        qty > 0
+                          ? "border-blue-600 ring-2 ring-blue-600/15"
+                          : "border-slate-200/90 hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        {p.imageUrl ? (
                           <img
-                            src={s.imageUrl}
-                            alt={s.name}
-                            className="w-12 h-12 rounded-md object-cover border border-slate-200 shrink-0"
+                            src={p.imageUrl}
+                            alt={p.name}
+                            referrerPolicy="no-referrer"
+                            className="w-11 h-11 rounded-sm object-cover border border-slate-200 shrink-0"
                           />
                         ) : (
-                          <div className="w-12 h-12 rounded-md bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0 text-base">
-                            <Shirt className="w-6 h-6 text-blue-600" />
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-sm text-slate-900 truncate">{s.name}</span>
-                            {metrics.isSelected && (
-                              <span className="p-0.5 rounded-full bg-blue-600 text-white shrink-0">
-                                <Check className="w-3 h-3" />
-                              </span>
+                          <div className="w-11 h-11 rounded-sm bg-slate-100 flex items-center justify-center shrink-0">
+                            {p.category === "DETERGENT" ? (
+                              <Droplets className="w-5 h-5 text-blue-600" />
+                            ) : p.category === "SOFTENER" ? (
+                              <Sparkles className="w-5 h-5 text-pink-500" />
+                            ) : (
+                              <Package className="w-5 h-5 text-indigo-600" />
                             )}
                           </div>
-                          <p className="text-xs text-slate-500 mt-0.5 truncate">
-                            <strong className="text-slate-700">{formatRupiah(s.price)}</strong>
-                            {category === "WEIGHT_BASED"
-                              ? ` / ${maxKg} kg (${formatMachineLabel(s.washerCount, s.dryerCount)})`
-                              : ` • ${formatMachineLabel(s.washerCount, s.dryerCount)}`}
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[11px] text-slate-500 tabular-nums">
+                            {CATEGORY_LABEL[p.category]}
+                            <span className="mx-1 text-slate-300">·</span>
+                            <span className={p.currentStock <= 0 ? "text-red-600 font-medium" : ""}>
+                              {p.currentStock} pcs
+                            </span>
+                          </div>
+                          <p className="font-semibold text-sm text-slate-900 truncate mt-0.5" title={p.name}>
+                            {p.name}
+                          </p>
+                          <p className="text-xs font-mono font-semibold text-blue-600 tabular-nums mt-0.5">
+                            {formatRupiah(p.price)}
                           </p>
                         </div>
                       </div>
-                    </div>
 
-                    {metrics.isSelected && (
-                      <div className="p-3.5 bg-blue-50/70 border-t border-blue-100 space-y-3">
-                        {category === "WEIGHT_BASED" && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-                                <Scale className="w-3.5 h-3.5 text-blue-600" />
-                                Berapa kilo kain untuk layanan ini?
-                              </label>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <span
+                          key={qty}
+                          className="text-xs font-mono text-slate-500 tabular-nums animate-content-swap"
+                        >
+                          {qty > 0 ? formatRupiah(p.price * qty) : ""}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {qty > 0 && (
+                            <div className="flex items-center gap-1.5 animate-content-swap">
                               <button
                                 type="button"
-                                onClick={() => toggleService(s)}
-                                className="text-[11px] text-red-600 hover:underline font-semibold"
-                              >
-                                Batalkan
-                              </button>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="0.1"
-                                autoFocus
-                                onFocus={(e) => e.target.select()}
-                                value={config?.value || ""}
-                                onChange={(e) => updateServiceValue(s.id, e.target.value)}
-                                placeholder="Timbang kain (contoh: 10.5)"
-                                className="w-full px-3 py-1.5 bg-white border border-blue-300 rounded-md text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              />
-                              <span className="text-xs font-bold text-slate-600 bg-white px-2 py-1.5 border border-blue-200 rounded-md">
-                                kg
-                              </span>
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-1 pt-0.5">
-                              <span className="text-[10px] font-semibold text-slate-500 mr-1">
-                                Cepat:
-                              </span>
-                              {[5, 8, 10, 12, 16, 20].map((kg) => (
-                                <button
-                                  key={kg}
-                                  type="button"
-                                  onClick={() => updateServiceValue(s.id, String(kg))}
-                                  className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white hover:bg-blue-100 border border-blue-200 text-blue-700 transition"
-                                >
-                                  {kg} kg
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {category === "SPREI" && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-bold text-blue-900">
-                                Berapa lembar sprei? (1 mesin / sprei)
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => toggleService(s)}
-                                className="text-[11px] text-red-600 hover:underline font-semibold"
-                              >
-                                Batalkan
-                              </button>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateServiceValue(
-                                    s.id,
-                                    String(Math.max(1, Number(config?.value || 1) - 1))
-                                  )
-                                }
-                                className="p-1.5 rounded-md bg-white border border-blue-200 hover:bg-blue-100 text-slate-700"
+                                onClick={() => updateProductQty(p.id, -1)}
+                                className="w-7 h-7 rounded-sm border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center text-slate-700 cursor-pointer transition-colors"
                               >
                                 <Minus className="w-3.5 h-3.5" />
                               </button>
-                              <input
-                                type="number"
-                                min="1"
-                                value={config?.value || ""}
-                                onChange={(e) => updateServiceValue(s.id, e.target.value)}
-                                className="w-20 text-center px-2 py-1.5 bg-white border border-blue-300 rounded-md text-sm font-bold text-slate-800"
-                              />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateServiceValue(
-                                    s.id,
-                                    String(Number(config?.value || 0) + 1)
-                                  )
-                                }
-                                className="p-1.5 rounded-md bg-white border border-blue-200 hover:bg-blue-100 text-slate-700"
+                              <span
+                                key={`qty-${qty}`}
+                                className="w-6 text-center font-mono font-semibold text-sm tabular-nums animate-content-swap"
                               >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
-                              <span className="text-xs font-semibold text-slate-600">
-                                lembar sprei
+                                {qty}
                               </span>
                             </div>
-                          </div>
-                        )}
-
-                        {category === "SELIMUT_BESAR" && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-bold text-blue-900">
-                                Berapa lembar selimut besar? (1 mesin / selimut)
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => toggleService(s)}
-                                className="text-[11px] text-red-600 hover:underline font-semibold"
-                              >
-                                Batalkan
-                              </button>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateServiceValue(
-                                    s.id,
-                                    String(Math.max(1, Number(config?.value || 1) - 1))
-                                  )
-                                }
-                                className="p-1.5 rounded-md bg-white border border-blue-200 hover:bg-blue-100 text-slate-700"
-                              >
-                                <Minus className="w-3.5 h-3.5" />
-                              </button>
-                              <input
-                                type="number"
-                                min="1"
-                                value={config?.value || ""}
-                                onChange={(e) => updateServiceValue(s.id, e.target.value)}
-                                className="w-20 text-center px-2 py-1.5 bg-white border border-blue-300 rounded-md text-sm font-bold text-slate-800"
-                              />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateServiceValue(
-                                    s.id,
-                                    String(Number(config?.value || 0) + 1)
-                                  )
-                                }
-                                className="p-1.5 rounded-md bg-white border border-blue-200 hover:bg-blue-100 text-slate-700"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
-                              <span className="text-xs font-semibold text-slate-600">
-                                lembar selimut besar
-                              </span>
-                            </div>
-                          </div>
-                        )}
-
-                        {category === "SELIMUT_KECIL" && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-bold text-blue-900">
-                                Berapa lembar selimut kecil? (Maks. 2 per mesin)
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => toggleService(s)}
-                                className="text-[11px] text-red-600 hover:underline font-semibold"
-                              >
-                                Batalkan
-                              </button>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateServiceValue(
-                                    s.id,
-                                    String(Math.max(1, Number(config?.value || 1) - 1))
-                                  )
-                                }
-                                className="p-1.5 rounded-md bg-white border border-blue-200 hover:bg-blue-100 text-slate-700"
-                              >
-                                <Minus className="w-3.5 h-3.5" />
-                              </button>
-                              <input
-                                type="number"
-                                min="1"
-                                value={config?.value || ""}
-                                onChange={(e) => updateServiceValue(s.id, e.target.value)}
-                                className="w-20 text-center px-2 py-1.5 bg-white border border-blue-300 rounded-md text-sm font-bold text-slate-800"
-                              />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateServiceValue(
-                                    s.id,
-                                    String(Number(config?.value || 0) + 1)
-                                  )
-                                }
-                                className="p-1.5 rounded-md bg-white border border-blue-200 hover:bg-blue-100 text-slate-700"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
-                              <span className="text-xs font-semibold text-slate-600">
-                                lembar (maks 2/mesin)
-                              </span>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="text-xs font-semibold bg-white p-2.5 rounded-md border border-blue-200 flex flex-wrap items-center justify-between gap-2 shadow-xs">
-                          <span className="text-blue-950 font-medium">
-                            {metrics.explanation}
-                          </span>
-                          <span className="text-sm font-black text-blue-700">
-                            {formatRupiah(metrics.subtotal)}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 2. Add-on Sachet */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h2 className="font-bold text-slate-900 text-base">
-                  2. Add-On Sachet (Deterjen, Pengharum, Parfum)
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Tambahkan jika pelanggan membutuhkan sabun atau pewangi
-                </p>
-              </div>
-            </div>
-
-            <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {products.map((p) => {
-                const qty = productCart[p.id] || 0;
-                return (
-                  <div
-                    key={p.id}
-                    className={`p-3 rounded-md border bg-white flex flex-col justify-between gap-2 transition ${
-                      qty > 0
-                        ? "border-blue-500 ring-2 ring-blue-500/20 shadow-sm"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-start gap-2.5">
-                      {p.imageUrl ? (
-                        <img
-                          src={p.imageUrl}
-                          alt={p.name}
-                          className="w-12 h-12 rounded-md object-cover border border-slate-200 shrink-0"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-md bg-slate-100 flex items-center justify-center text-slate-500 shrink-0 text-base">
-                          {p.category === "DETERGENT" ? (
-                            <Droplets className="w-6 h-6 text-blue-600" />
-                          ) : p.category === "SOFTENER" ? (
-                            <Sparkles className="w-6 h-6 text-pink-500" />
-                          ) : (
-                            <Package className="w-6 h-6 text-purple-600" />
                           )}
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-                            {CATEGORY_LABEL[p.category]}
-                          </span>
-                          <span
-                            className={`text-[11px] font-semibold ${
-                              p.currentStock <= 0 ? "text-red-600" : "text-slate-500"
-                            }`}
+                          <button
+                            type="button"
+                            onClick={() => updateProductQty(p.id, 1)}
+                            className="w-7 h-7 rounded-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white flex items-center justify-center cursor-pointer shadow-xs transition-all"
                           >
-                            {p.currentStock} pcs
-                          </span>
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                        <p className="font-semibold text-xs mt-1 text-slate-900 truncate" title={p.name}>
-                          {p.name}
-                        </p>
-                        <p className="text-xs font-bold text-blue-600">{formatRupiah(p.price)}</p>
                       </div>
                     </div>
+                  );
+                  })
+                )}
+              </div>
+            </section>
+          </div>
 
-                    <div className="flex items-center justify-end gap-2 pt-1">
-                      {qty > 0 && (
-                        <>
-                          <button
-                            onClick={() => updateProductQty(p.id, -1)}
-                            className="p-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700"
-                          >
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="w-6 text-center font-bold text-sm">{qty}</span>
-                        </>
-                      )}
-                      <button
-                        onClick={() => updateProductQty(p.id, 1)}
-                        className="p-1.5 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100"
+          {/* Right 4 Columns: Checkout Panel */}
+          <aside className="lg:col-span-4 bg-white rounded-sm border border-slate-200/90 shadow-xs lg:sticky lg:top-20 overflow-hidden">
+            <div className="px-5 py-4 bg-gradient-to-r from-blue-600 via-blue-600 to-indigo-600 text-white flex items-center justify-between">
+              <h2 className="font-semibold text-sm text-white">Ringkasan Transaksi</h2>
+              <span className="text-xs font-mono text-blue-100 tabular-nums">
+                {summary.totalWasher}W · {summary.totalDryer}D
+              </span>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Machine Summary Strip */}
+              <div className="grid grid-cols-2 divide-x divide-blue-100 py-2.5 bg-blue-50/60 rounded-sm border border-blue-100 text-center">
+                <div>
+                  <span className="text-[11px] text-slate-500 block">Mesin Cuci</span>
+                  <span
+                    key={`w-${summary.totalWasher}`}
+                    className="inline-block text-sm font-mono font-semibold text-blue-900 tabular-nums animate-content-swap"
+                  >
+                    {summary.totalWasher} Mesin
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[11px] text-slate-500 block">Mesin Kering</span>
+                  <span
+                    key={`d-${summary.totalDryer}`}
+                    className="inline-block text-sm font-mono font-semibold text-blue-900 tabular-nums animate-content-swap"
+                  >
+                    {summary.totalDryer} Mesin
+                  </span>
+                </div>
+              </div>
+
+              {/* Cart Items */}
+              <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                {summary.activeServiceLines.map((line) => (
+                  <div
+                    key={line.service.id}
+                    className="pb-2.5 border-b border-slate-100 last:border-none last:pb-0 animate-content-swap"
+                  >
+                    <div className="flex justify-between gap-2 text-[13px] font-medium text-slate-900">
+                      <span>
+                        {line.service.name} × {line.multiplier}
+                      </span>
+                      <span
+                        key={line.subtotal}
+                        className="font-mono font-semibold tabular-nums shrink-0 animate-content-swap"
                       >
-                        <Plus className="w-4 h-4" />
-                      </button>
+                        {formatRupiah(line.subtotal)}
+                      </span>
+                    </div>
+                    <div
+                      key={line.explanation}
+                      className="text-[11px] text-slate-500 mt-0.5 animate-content-swap"
+                    >
+                      {line.explanation}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+                ))}
 
-        {/* Kolom Kanan: Ringkasan Order & Pembayaran */}
-        <div className="bg-white p-5 rounded-md border border-slate-200 h-fit sticky top-20 space-y-4 shadow-sm">
-          <h2 className="font-bold text-lg border-b border-slate-100 pb-2">
-            Ringkasan Transaksi
-          </h2>
-
-          <div className="flex justify-around text-xs bg-slate-50 p-3 rounded-md border border-slate-200/60">
-            <div>
-              <span className="text-slate-500 block">Washer:</span>
-              <strong className="text-blue-600 font-bold">{summary.totalWasher} Mesin</strong>
-            </div>
-            <div>
-              <span className="text-slate-500 block">Dryer:</span>
-              <strong className="text-indigo-600 font-bold">{summary.totalDryer} Mesin</strong>
-            </div>
-          </div>
-          <div className="space-y-2 text-sm max-h-56 overflow-y-auto pr-1">
-            {summary.activeServiceLines.map((line) => (
-              <div
-                key={line.service.id}
-                className="py-1.5 border-b border-slate-100/60 last:border-none"
-              >
-                <div className="flex justify-between font-semibold text-slate-900">
-                  <span>
-                    {line.service.name} ({line.multiplier}x)
-                  </span>
-                  <span>{formatRupiah(line.subtotal)}</span>
-                </div>
-                <div className="text-[11px] text-slate-500">{line.explanation}</div>
-              </div>
-            ))}
-
-            {products.map((p) => {
-              const qty = productCart[p.id];
-              if (!qty) return null;
-              return (
-                <div
-                  key={p.id}
-                  className="flex justify-between text-slate-600 py-1 border-b border-slate-100/60 last:border-none"
-                >
-                  <span>
-                    {p.name} × {qty}
-                  </span>
-                  <span className="font-medium">{formatRupiah(p.price * qty)}</span>
-                </div>
-              );
-            })}
-
-            {summary.totalAmount === 0 && (
-              <p className="text-slate-400 text-center py-6 text-xs">
-                Belum ada layanan yang dipilih
-              </p>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-              <label className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                Nama Pelanggan <span className="text-red-500">*</span>:
-              </label>
-              <input
-                type="text"
-                required
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Contoh: Bu Rini / Mas Tian"
-                className="w-full sm:w-56 px-3 py-1.5 border border-slate-300 rounded-md text-sm font-semibold focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-
-          <div className="border-t border-slate-200 pt-3 flex justify-between items-baseline">
-            <span className="font-semibold text-slate-700">Total Tagihan</span>
-            <span className="text-2xl font-black text-blue-600">
-              {formatRupiah(summary.totalAmount)}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setPaymentMethod("QRIS")}
-              className={`py-2.5 rounded-md border text-sm font-bold flex items-center justify-center gap-1.5 transition ${
-                paymentMethod === "QRIS"
-                  ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                  : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              <QrCode className="w-4 h-4" />
-              QRIS
-            </button>
-            <button
-              type="button"
-              onClick={() => setPaymentMethod("CASH")}
-              className={`py-2.5 rounded-md border text-sm font-bold flex items-center justify-center gap-1.5 transition ${
-                paymentMethod === "CASH"
-                  ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                  : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              <Banknote className="w-4 h-4" />
-              Cash
-            </button>
-          </div>
-
-          {paymentMethod === "CASH" && (
-            <div className="space-y-2 pt-1">
-              <label className="block text-xs font-semibold text-slate-600">
-                Uang Diterima (Rp)
-              </label>
-              <input
-                type="number"
-                value={cashReceived}
-                onChange={(e) => setCashReceived(e.target.value)}
-                placeholder="0"
-                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-semibold"
-              />
-              <div className="flex flex-wrap gap-1.5">
-                {[summary.totalAmount, 20000, 50000, 100000]
-                  .filter((v) => v > 0)
-                  .map((val, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setCashReceived(String(val))}
-                      className="text-xs px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 font-medium"
+                {products.map((p) => {
+                  const qty = productCart[p.id];
+                  if (!qty) return null;
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex justify-between gap-2 text-[13px] text-slate-700 pb-2 border-b border-slate-100 last:border-none last:pb-0 animate-content-swap"
                     >
-                      {idx === 0 ? "Uang Pas" : formatRupiah(val)}
-                    </button>
-                  ))}
+                      <span>
+                        {p.name} × {qty}
+                      </span>
+                      <span
+                        key={qty}
+                        className="font-mono font-medium tabular-nums shrink-0 animate-content-swap"
+                      >
+                        {formatRupiah(p.price * qty)}
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {summary.totalAmount === 0 && (
+                  <p className="text-slate-400 text-center py-6 text-xs animate-content-swap">
+                    Belum ada layanan atau sachet yang dipilih
+                  </p>
+                )}
               </div>
-              {cashNum > 0 && (
-                <p
-                  className={`text-sm font-bold ${
-                    cashChange < 0 ? "text-red-600" : "text-emerald-600"
+
+              {/* Customer Name */}
+              <div className="pt-3 border-t border-slate-200/80 space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Nama Pelanggan <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Contoh: Bu Rini / Mas Tian"
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-sm text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition"
+                />
+              </div>
+
+              {/* Total */}
+              <div className="pt-3 border-t border-slate-200/80 flex justify-between items-baseline">
+                <span className="text-xs font-semibold text-slate-600">Total Tagihan</span>
+                <span
+                  key={summary.totalAmount}
+                  className="text-2xl font-mono font-semibold text-blue-700 tabular-nums animate-content-swap"
+                >
+                  {formatRupiah(summary.totalAmount)}
+                </span>
+              </div>
+
+              {/* Payment Method Segmented Toggle */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-sm border border-slate-200/70">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("QRIS")}
+                  className={`py-2 rounded-sm text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    paymentMethod === "QRIS"
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs"
+                      : "text-slate-600 hover:text-blue-700"
                   }`}
                 >
-                  {cashChange < 0
-                    ? `Kurang ${formatRupiah(Math.abs(cashChange))}`
-                    : `Kembalian: ${formatRupiah(cashChange)}`}
-                </p>
-              )}
-            </div>
-          )}
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>QRIS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("CASH")}
+                  className={`py-2 rounded-sm text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    paymentMethod === "CASH"
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs"
+                      : "text-slate-600 hover:text-blue-700"
+                  }`}
+                >
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Tunai</span>
+                </button>
+              </div>
 
-          <button
-            onClick={handleCheckout}
-            disabled={submitting || summary.totalAmount === 0 || Boolean(pendingQris)}
-            className="w-full py-3.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm disabled:opacity-50 shadow-md transition"
-          >
-            {submitting
-              ? "Memproses..."
-              : paymentMethod === "CASH"
-              ? "Proses Bayar Cash"
-              : "Tampilkan QRIS ke Layar Pelanggan"}
-          </button>
+              <div
+                className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                  paymentMethod === "CASH"
+                    ? "grid-rows-[1fr] opacity-100"
+                    : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}
+                aria-hidden={paymentMethod !== "CASH"}
+              >
+                <div className="overflow-hidden">
+                  <div className="space-y-2.5 pt-0.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Uang Diterima (Rp)
+                    </label>
+                    <input
+                      type="number"
+                      tabIndex={paymentMethod === "CASH" ? 0 : -1}
+                      value={cashReceived}
+                      onChange={(e) => setCashReceived(e.target.value)}
+                      placeholder="0"
+                      className="w-full px-3.5 py-2 border border-slate-200 rounded-sm text-sm font-mono font-semibold tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition"
+                    />
+                    <div className="flex flex-wrap gap-1.5">
+                      {[summary.totalAmount, 20000, 50000, 100000]
+                        .filter((v) => v > 0)
+                        .map((val, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            tabIndex={paymentMethod === "CASH" ? 0 : -1}
+                            onClick={() => setCashReceived(String(val))}
+                            className="text-xs px-2.5 py-1 rounded-sm border border-slate-200 bg-white hover:bg-blue-50/70 hover:border-blue-300 font-medium text-slate-700 tabular-nums cursor-pointer transition-colors"
+                          >
+                            {idx === 0 ? "Uang Pas" : formatRupiah(val)}
+                          </button>
+                        ))}
+                    </div>
+                    {cashNum > 0 && (
+                      <p
+                        key={cashChange}
+                        className={`text-xs font-mono font-semibold tabular-nums animate-content-swap ${
+                          cashChange < 0 ? "text-red-600" : "text-emerald-600"
+                        }`}
+                      >
+                        {cashChange < 0
+                          ? `Kurang ${formatRupiah(Math.abs(cashChange))}`
+                          : `Kembalian: ${formatRupiah(cashChange)}`}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCheckout}
+                disabled={submitting || summary.totalAmount === 0 || Boolean(pendingQris)}
+                className="w-full py-3 px-4 rounded-sm bg-gradient-to-r from-blue-600 via-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-sm shadow-md shadow-blue-600/20 disabled:opacity-50 transition-all cursor-pointer"
+              >
+                {submitting
+                  ? "Memproses..."
+                  : paymentMethod === "CASH"
+                  ? "Proses Pembayaran Tunai"
+                  : "Tampilkan QRIS ke Pelanggan"}
+              </button>
+            </div>
+          </aside>
         </div>
       </div>
     </AppShell>

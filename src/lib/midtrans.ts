@@ -26,6 +26,15 @@ export async function chargeQris({
   grossAmount,
   customerName,
 }: ChargeQrisParams) {
+  if (!process.env.MIDTRANS_SERVER_KEY) {
+    return {
+      qrString: `00020101021226580014ID.CO.QRIS.WWW0215ID1020000000001520454995303360540${grossAmount}5802ID5916LAUNDRY TRICOINS6007JAKARTA62180114${orderId}6304ABCD`,
+      qrUrl: `https://api.sandbox.midtrans.com/v2/qris/${orderId}/qr-code`,
+      expiryTime: new Date(Date.now() + 15 * 60 * 1000),
+      raw: { mock: true, order_id: orderId },
+    };
+  }
+
   const parameter = {
     payment_type: "qris",
     transaction_details: {
@@ -45,8 +54,16 @@ export async function chargeQris({
   };
 
   const response = await coreApi.charge(parameter);
+  const qrAction = Array.isArray(response.actions)
+    ? response.actions.find(
+        (a: { name?: string; url?: string }) =>
+          a.name === "generate-qr-code" || a.name === "generate-qr-code-v2"
+      )
+    : null;
+
   return {
     qrString: response.qr_string as string,
+    qrUrl: (qrAction?.url as string) || null,
     expiryTime: response.expiry_time
       ? new Date(response.expiry_time)
       : new Date(Date.now() + 15 * 60 * 1000),
@@ -78,11 +95,17 @@ export async function createSnapTransaction({
 }
 
 export async function getMidtransStatus(orderId: string) {
+  if (!process.env.MIDTRANS_SERVER_KEY) {
+    return { order_id: orderId, transaction_status: "pending" };
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (coreApi as any).transaction.status(orderId);
 }
 
 export async function cancelMidtransTransaction(orderId: string) {
+  if (!process.env.MIDTRANS_SERVER_KEY) {
+    return { order_id: orderId, status_code: "200" };
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (coreApi as any).transaction.cancel(orderId);
 }

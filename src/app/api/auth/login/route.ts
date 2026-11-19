@@ -46,10 +46,14 @@ export async function POST(req: Request) {
       },
     });
 
+    const isHttps =
+      req.headers.get("x-forwarded-proto") === "https" ||
+      req.url.startsWith("https://");
+
     res.cookies.set(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: process.env.NODE_ENV === "production" && isHttps,
       path: "/",
       maxAge: 60 * 60 * 24 * 7, // 7 hari
     });

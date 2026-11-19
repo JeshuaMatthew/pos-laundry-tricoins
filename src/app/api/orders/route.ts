@@ -3,7 +3,7 @@ import { PaymentMethod, PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
 import { chargeQris } from "@/lib/midtrans";
-import { notifyCartUpdate, notifyDisplayUpdate } from "@/lib/pusher";
+import { notifyCartUpdate, notifyDisplayUpdate, setOrderQrisUrl } from "@/lib/pusher";
 import { deductOrderStockTx, generateInvoiceNumber } from "@/lib/order-service";
 
 export async function GET(req: Request) {
@@ -189,10 +189,12 @@ export async function POST(req: Request) {
       });
     });
 
+    setOrderQrisUrl(order.id, qris.qrUrl);
+
     await notifyDisplayUpdate({ type: "QRIS_CREATED", orderId: order.id });
     await notifyCartUpdate(null);
 
-    return NextResponse.json({ order }, { status: 201 });
+    return NextResponse.json({ order: { ...order, qrisUrl: qris.qrUrl } }, { status: 201 });
   } catch (err: unknown) {
     console.error(err);
     const message = err instanceof Error ? err.message : "Gagal membuat order";

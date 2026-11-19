@@ -24,9 +24,26 @@ export interface LiveCartPayload {
 }
 
 const globalForPusher = globalThis as unknown as {
-  pusherServer: Pusher | undefined;
+  pusherServer: Pusher | null | undefined;
   activeCustomerCart: LiveCartPayload | null | undefined;
+  qrisUrlMap: Map<string, string> | undefined;
 };
+
+function getQrisUrlMap(): Map<string, string> {
+  if (!globalForPusher.qrisUrlMap) {
+    globalForPusher.qrisUrlMap = new Map<string, string>();
+  }
+  return globalForPusher.qrisUrlMap;
+}
+
+export function setOrderQrisUrl(orderId: string, url: string | null) {
+  if (!url) return;
+  getQrisUrlMap().set(orderId, url);
+}
+
+export function getOrderQrisUrl(orderId: string): string | null {
+  return getQrisUrlMap().get(orderId) || null;
+}
 
 export function getActiveCustomerCart(): LiveCartPayload | null {
   return globalForPusher.activeCustomerCart || null;
@@ -36,15 +53,29 @@ export function setActiveCustomerCart(cart: LiveCartPayload | null) {
   globalForPusher.activeCustomerCart = cart;
 }
 
-export const pusherServer =
-  globalForPusher.pusherServer ??
-  new Pusher({
-    appId: process.env.PUSHER_APP_ID!,
-    key: process.env.NEXT_PUBLIC_PUSHER_KEY!,
-    secret: process.env.PUSHER_SECRET!,
-    cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
+function createPusherServer(): Pusher | null {
+  const appId = process.env.PUSHER_APP_ID;
+  const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
+  const secret = process.env.PUSHER_SECRET;
+  const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+
+  if (!appId || !key || !secret || !cluster) {
+    return null;
+  }
+
+  return new Pusher({
+    appId,
+    key,
+    secret,
+    cluster,
     useTLS: true,
   });
+}
+
+export const pusherServer =
+  globalForPusher.pusherServer !== undefined
+    ? globalForPusher.pusherServer
+    : createPusherServer();
 
 if (process.env.NODE_ENV !== "production") {
   globalForPusher.pusherServer = pusherServer;
@@ -54,6 +85,7 @@ export async function notifyDisplayUpdate(payload: {
   type: "QRIS_CREATED" | "ORDER_PAID" | "DISPLAY_CLEARED";
   orderId?: string;
 }) {
+  if (!pusherServer) return;
   try {
     await pusherServer.trigger(PUSHER_CHANNEL, PUSHER_EVENT_DISPLAY_UPDATE, payload);
   } catch (error) {
@@ -63,6 +95,7 @@ export async function notifyDisplayUpdate(payload: {
 
 export async function notifyCartUpdate(cart: LiveCartPayload | null) {
   setActiveCustomerCart(cart);
+  if (!pusherServer) return;
   try {
     await pusherServer.trigger(PUSHER_CHANNEL, PUSHER_EVENT_CART_UPDATE, cart);
   } catch (error) {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
+import { deleteImageByUrl } from "@/lib/blob";
 
 export async function PATCH(
   req: Request,
@@ -13,6 +14,17 @@ export async function PATCH(
   const { id } = await params;
   try {
     const body = await req.json();
+    const existing = await prisma.service.findUnique({
+      where: { id },
+      select: { imageUrl: true },
+    });
+
+    const nextImageUrl =
+      body.imageUrl !== undefined
+        ? body.imageUrl
+          ? String(body.imageUrl).trim()
+          : null
+        : undefined;
 
     const service = await prisma.service.update({
       where: { id },
@@ -24,13 +36,19 @@ export async function PATCH(
         ...(body.maxWeightKg !== undefined && {
           maxWeightKg: body.maxWeightKg ? Number(body.maxWeightKg) : null,
         }),
-        ...(body.imageUrl !== undefined && {
-          imageUrl: body.imageUrl ? String(body.imageUrl).trim() : null,
-        }),
+        ...(nextImageUrl !== undefined && { imageUrl: nextImageUrl }),
         ...(body.sortOrder !== undefined && { sortOrder: Number(body.sortOrder) }),
         ...(body.isActive !== undefined && { isActive: Boolean(body.isActive) }),
       },
     });
+
+    if (
+      nextImageUrl !== undefined &&
+      existing?.imageUrl &&
+      existing.imageUrl !== nextImageUrl
+    ) {
+      await deleteImageByUrl(existing.imageUrl);
+    }
 
     return NextResponse.json({ service });
   } catch (err: unknown) {
@@ -48,6 +66,11 @@ export async function DELETE(
 
   const { id } = await params;
   try {
+    const existing = await prisma.service.findUnique({
+      where: { id },
+      select: { imageUrl: true },
+    });
+
     const orderCount = await prisma.orderService.count({ where: { serviceId: id } });
     if (orderCount > 0) {
       await prisma.service.update({
@@ -61,6 +84,10 @@ export async function DELETE(
     }
 
     await prisma.service.delete({ where: { id } });
+    if (existing?.imageUrl) {
+      await deleteImageByUrl(existing.imageUrl);
+    }
+
     return NextResponse.json({ ok: true, message: "Layanan berhasil dihapus permanen." });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Gagal menghapus layanan";

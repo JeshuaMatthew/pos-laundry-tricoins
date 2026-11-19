@@ -14,7 +14,12 @@ export interface SessionPayload {
 
 function getSecretKey() {
   const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET belum diatur di .env");
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("JWT_SECRET environment variable is required");
+    }
+    return new TextEncoder().encode("local-dev-jwt-secret");
+  }
   return new TextEncoder().encode(secret);
 }
 
@@ -47,8 +52,7 @@ export async function requireAuth(allowedRoles?: Role[]): Promise<SessionPayload
   if (!session) return null;
   if (allowedRoles && !allowedRoles.includes(session.role)) return null;
 
-  // Validasi bahwa user masih ada di database
-  // (mencegah error FK jika DB di-reset tapi session JWT masih lama)
+  // Validasi bahwa user masih ada dan aktif di database
   try {
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
@@ -56,8 +60,7 @@ export async function requireAuth(allowedRoles?: Role[]): Promise<SessionPayload
     });
     if (!user || !user.isActive) return null;
   } catch {
-    // Jika DB error, biarkan session berlanjut (hindari loop logout)
-    return session;
+    return null;
   }
 
   return session;

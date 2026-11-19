@@ -6,16 +6,36 @@ export const PUSHER_CHANNEL = "laundry-pos";
 export const PUSHER_EVENT_DISPLAY_UPDATE = "display-updated";
 export const PUSHER_EVENT_CART_UPDATE = "cart-updated";
 
-let pusherClientInstance: PusherClient | null = null;
+interface PusherChannelStub {
+  bind: (event: string, cb: (data: never) => void) => void;
+  unbind_all: () => void;
+}
 
-export function getPusherClient() {
+interface PusherLike {
+  subscribe: (channelName: string) => PusherChannelStub;
+  unsubscribe: (channelName: string) => void;
+}
+
+let pusherClientInstance: PusherLike | null = null;
+
+export function getPusherClient(): PusherLike {
   if (!pusherClientInstance) {
-    pusherClientInstance = new PusherClient(
-      process.env.NEXT_PUBLIC_PUSHER_KEY!,
-      {
-        cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
-      }
-    );
+    const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
+    const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+
+    if (!key || !cluster) {
+      pusherClientInstance = {
+        subscribe: () => ({
+          bind: () => {},
+          unbind_all: () => {},
+        }),
+        unsubscribe: () => {},
+      };
+    } else {
+      pusherClientInstance = new PusherClient(key, {
+        cluster,
+      }) as unknown as PusherLike;
+    }
   }
   return pusherClientInstance;
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getActiveCustomerCart } from "@/lib/pusher";
+import { getActiveCustomerCart, getOrderQrisUrl } from "@/lib/pusher";
 
 export async function GET() {
   try {
@@ -54,8 +54,23 @@ export async function GET() {
     }
 
     const liveCart = getActiveCustomerCart();
+    const enrichedActiveOrder = activeOrder
+      ? {
+          ...activeOrder,
+          qrisUrl:
+            getOrderQrisUrl(activeOrder.id) ||
+            (activeOrder.midtransOrderId
+              ? `https://api.sandbox.midtrans.com/v2/qris/${activeOrder.midtransOrderId}/qr-code`
+              : activeOrder.qrisString),
+        }
+      : null;
 
-    return NextResponse.json({ services, products, activeOrder, liveCart });
+    return NextResponse.json({
+      services,
+      products,
+      activeOrder: enrichedActiveOrder,
+      liveCart,
+    });
   } catch (err) {
     console.error("GET /api/customer-display error:", err);
     return NextResponse.json(

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ProductCategory, Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
+import { deleteImageByUrl } from "@/lib/blob";
 
 export async function PATCH(
   req: Request,
@@ -13,6 +14,17 @@ export async function PATCH(
   const { id } = await params;
   try {
     const body = await req.json();
+    const existing = await prisma.product.findUnique({
+      where: { id },
+      select: { imageUrl: true },
+    });
+
+    const nextImageUrl =
+      body.imageUrl !== undefined
+        ? body.imageUrl
+          ? String(body.imageUrl).trim()
+          : null
+        : undefined;
 
     const product = await prisma.product.update({
       where: { id },
@@ -27,13 +39,19 @@ export async function PATCH(
         ...(body.packQty !== undefined && {
           packQty: body.packQty ? Number(body.packQty) : null,
         }),
-        ...(body.imageUrl !== undefined && {
-          imageUrl: body.imageUrl ? String(body.imageUrl).trim() : null,
-        }),
+        ...(nextImageUrl !== undefined && { imageUrl: nextImageUrl }),
         ...(body.sortOrder !== undefined && { sortOrder: Number(body.sortOrder) }),
         ...(body.isActive !== undefined && { isActive: Boolean(body.isActive) }),
       },
     });
+
+    if (
+      nextImageUrl !== undefined &&
+      existing?.imageUrl &&
+      existing.imageUrl !== nextImageUrl
+    ) {
+      await deleteImageByUrl(existing.imageUrl);
+    }
 
     return NextResponse.json({ product });
   } catch (err: unknown) {
@@ -51,6 +69,11 @@ export async function DELETE(
 
   const { id } = await params;
   try {
+    const existing = await prisma.product.findUnique({
+      where: { id },
+      select: { imageUrl: true },
+    });
+
     const [orderCount, movementCount, opnameCount] = await Promise.all([
       prisma.orderProduct.count({ where: { productId: id } }),
       prisma.stockMovement.count({ where: { productId: id } }),
@@ -69,6 +92,10 @@ export async function DELETE(
     }
 
     await prisma.product.delete({ where: { id } });
+    if (existing?.imageUrl) {
+      await deleteImageByUrl(existing.imageUrl);
+    }
+
     return NextResponse.json({ ok: true, message: "Produk berhasil dihapus permanen." });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Gagal menghapus produk";
