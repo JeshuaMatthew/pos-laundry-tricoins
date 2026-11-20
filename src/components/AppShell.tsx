@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   ClipboardCheck,
-  Coins,
   History,
   LayoutDashboard,
   LogOut,
@@ -156,9 +155,11 @@ export function AppShell({ children, ownerOnly = false }: AppShellProps) {
           href={user.role === "OWNER" ? "/dashboard" : "/pos"}
           className="flex items-center gap-2.5 whitespace-nowrap shrink-0"
         >
-          <div className="w-7 h-7 rounded-sm bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-600 text-white shadow-sm shadow-blue-600/25 flex items-center justify-center shrink-0">
-            <Coins className="w-4 h-4" />
-          </div>
+          <img
+            src="/logo-icon.webp"
+            alt="Laundry Tricoins"
+            className="w-8 h-8 object-contain shrink-0"
+          />
           <span className="font-semibold text-[15px] tracking-tight text-slate-900">
             Laundry Tricoins
           </span>
@@ -314,6 +315,11 @@ export function AppShell({ children, ownerOnly = false }: AppShellProps) {
             </button>
 
             <div className="flex items-center gap-2 text-sm min-w-0">
+              <img
+                src="/logo-icon.webp"
+                alt="Laundry Tricoins"
+                className="w-5 h-5 object-contain shrink-0"
+              />
               <span className="text-slate-400 hidden sm:inline whitespace-nowrap">
                 Laundry Tricoins
               </span>

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertCircle, ArrowRight, Coins, Eye, EyeOff } from "lucide-react";
+import { AlertCircle, ArrowRight, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -51,11 +51,13 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-[#F4F7FB] p-4">
       <div className="w-full max-w-sm bg-white border border-slate-200/90 rounded-sm p-7 space-y-6 shadow-sm animate-page-enter">
         <div className="space-y-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-sm bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-sm shadow-blue-600/25 shrink-0">
-              <Coins className="w-4 h-4" />
-            </div>
-            <span className="font-semibold text-base tracking-tight text-slate-900">
+          <div className="flex items-center gap-3">
+            <img
+              src="/logo-icon.webp"
+              alt="Laundry Tricoins"
+              className="w-10 h-10 object-contain shrink-0"
+            />
+            <span className="font-semibold text-lg tracking-tight text-slate-900">
               Laundry Tricoins
             </span>
           </div>

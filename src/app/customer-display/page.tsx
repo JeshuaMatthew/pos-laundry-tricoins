@@ -6,7 +6,6 @@ import {
   Check,
   CheckCircle2,
   Clock,
-  Coins,
   Copy,
   Droplets,
   Package,
@@ -390,9 +389,11 @@ export default function CustomerDisplayPage() {
       {/* Top Bar */}
       <header className="h-14 px-4 md:px-6 bg-white border-b border-slate-200/90 flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
-          <div className="w-8 h-8 rounded-sm bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-sm shadow-blue-600/25 shrink-0">
-            <Coins className="w-4 h-4" />
-          </div>
+          <img
+            src="/logo-icon.webp"
+            alt="Laundry Tricoins"
+            className="w-9 h-9 object-contain shrink-0"
+          />
           <span className="font-semibold text-sm md:text-base text-slate-900 tracking-tight">
             Laundry Tricoins
           </span>
