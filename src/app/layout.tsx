@@ -19,14 +19,12 @@ export const metadata: Metadata = {
   title: "Laundry Tricoins — System POS",
   description: "Sistem Point of Sales, Manajemen Mesin, dan Stok Sachet Laundry Tricoins",
   icons: {
-    icon: [
-      { url: "/logo-icon.webp", type: "image/webp" },
-      { url: "/icon.webp", type: "image/webp" },
-    ],
-    shortcut: "/logo-icon.webp",
-    apple: "/logo-icon.webp",
+    icon: { url: "/favicon.webp", type: "image/webp" },
+    shortcut: "/favicon.webp",
+    apple: "/apple-icon.png", // Disarankan pakai .png (180x180px) agar tampil di iOS
   },
 };
+
 
 export default function RootLayout({
   children,

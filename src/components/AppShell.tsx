@@ -156,9 +156,9 @@ export function AppShell({ children, ownerOnly = false }: AppShellProps) {
           className="flex items-center gap-2.5 whitespace-nowrap shrink-0"
         >
           <img
-            src="/logo-icon.webp"
+            src="/favicon.webp"
             alt="Laundry Tricoins"
-            className="w-8 h-8 object-contain shrink-0"
+            className="w-8 h-8 max-w-fit object-contain shrink-0"
           />
           <span className="font-semibold text-[15px] tracking-tight text-slate-900">
             Laundry Tricoins
@@ -315,11 +315,7 @@ export function AppShell({ children, ownerOnly = false }: AppShellProps) {
             </button>
 
             <div className="flex items-center gap-2 text-sm min-w-0">
-              <img
-                src="/logo-icon.webp"
-                alt="Laundry Tricoins"
-                className="w-5 h-5 object-contain shrink-0"
-              />
+
               <span className="text-slate-400 hidden sm:inline whitespace-nowrap">
                 Laundry Tricoins
               </span>

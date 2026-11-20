@@ -390,9 +390,9 @@ export default function CustomerDisplayPage() {
       <header className="h-14 px-4 md:px-6 bg-white border-b border-slate-200/90 flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
           <img
-            src="/logo-icon.webp"
+            src="/favicon.webp"
             alt="Laundry Tricoins"
-            className="w-9 h-9 object-contain shrink-0"
+            className="w-8 h-8 object-contain shrink-0"
           />
           <span className="font-semibold text-sm md:text-base text-slate-900 tracking-tight">
             Laundry Tricoins
