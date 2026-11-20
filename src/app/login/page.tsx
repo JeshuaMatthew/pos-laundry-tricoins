@@ -53,7 +53,7 @@ export default function LoginPage() {
         <div className="space-y-2">
           <div className="flex items-center gap-3">
             <img
-              src="/logo-icon.webp"
+              src="/favicon.webp"
               alt="Laundry Tricoins"
               className="w-10 h-10 object-contain shrink-0"
             />
