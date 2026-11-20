@@ -1,20 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
-  AlertCircle,
   Banknote,
   Check,
-  CheckCircle2,
   Droplets,
+  Loader2,
   Minus,
   Package,
   Plus,
   QrCode,
+  RefreshCw,
   Scale,
   Shirt,
   Sparkles,
-  X,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { formatRupiah } from "@/lib/format";
@@ -199,8 +199,8 @@ export default function PosPage() {
   const [submitting, setSubmitting] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [pendingQris, setPendingQris] = useState<PendingQrisOrder | null>(null);
-  const [successMsg, setSuccessMsg] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [checkingStatus, setCheckingStatus] = useState(false);
+  const isCheckingRef = useRef(false);
 
   const loadMasterData = useCallback(async () => {
     try {
@@ -221,15 +221,33 @@ export default function PosPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetch("/api/services"), fetch("/api/products")])
-      .then(async ([svcRes, prodRes]) => {
+    Promise.all([
+      fetch("/api/services"),
+      fetch("/api/products"),
+      fetch("/api/customer-display"),
+    ])
+      .then(async ([svcRes, prodRes, dispRes]) => {
         if (!active) return;
         const svcData = await safeJsonParse(svcRes);
         const prodData = await safeJsonParse(prodRes);
+        const dispData = await safeJsonParse(dispRes);
         const svcList = Array.isArray(svcData.services) ? svcData.services : [];
         const prodList = Array.isArray(prodData.products) ? prodData.products : [];
         setServices(svcList.sort((a: Service, b: Service) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
         setProducts(prodList.sort((a: Product, b: Product) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+
+        if (
+          dispData.activeOrder &&
+          dispData.activeOrder.paymentStatus === "PENDING" &&
+          dispData.activeOrder.midtransOrderId
+        ) {
+          setPendingQris({
+            id: dispData.activeOrder.id,
+            invoiceNumber: dispData.activeOrder.invoiceNumber,
+            customerName: dispData.activeOrder.customerName,
+            totalAmount: dispData.activeOrder.totalAmount,
+          });
+        }
       })
       .catch((err) => console.error("Gagal memuat master data POS:", err))
       .finally(() => {
@@ -247,8 +265,99 @@ export default function PosPage() {
     setCashReceived("");
   }, []);
 
+  const broadcastDisplaySync = useCallback((payload: {
+    action: "QRIS_CREATED" | "ORDER_PAID" | "DISPLAY_CLEARED";
+    order?: unknown;
+  }) => {
+    try {
+      if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+        const bc = new BroadcastChannel("tricoins-pos-sync");
+        bc.postMessage({
+          type: "ORDER_DISPLAY_SYNC",
+          ...payload,
+        });
+        bc.close();
+      }
+    } catch {}
+
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.setItem(
+          "tricoins_display_sync",
+          JSON.stringify({
+            ...payload,
+            time: Date.now(),
+          })
+        );
+      }
+    } catch {}
+  }, []);
+
+  const checkQrisStatus = useCallback(
+    async (silent = false) => {
+      if (!pendingQris || isCheckingRef.current) return;
+      isCheckingRef.current = true;
+      if (!silent) setCheckingStatus(true);
+
+      try {
+        const res = await fetch(`/api/orders/${pendingQris.id}/check-status`);
+        const data = await safeJsonParse(res);
+        if (data.order?.paymentStatus === "PAID") {
+          toast.success(`Pembayaran QRIS ${pendingQris.invoiceNumber} LUNAS!`);
+          setPendingQris(null);
+          resetCart();
+          loadMasterData();
+          broadcastDisplaySync({ action: "ORDER_PAID", order: data.order });
+        } else if (
+          data.order?.paymentStatus === "EXPIRED" ||
+          data.order?.paymentStatus === "CANCELLED"
+        ) {
+          toast.error("QRIS kedaluwarsa atau dibatalkan.");
+          setPendingQris(null);
+          broadcastDisplaySync({ action: "DISPLAY_CLEARED" });
+        } else {
+          if (!silent) {
+            toast.info("Belum ada pembayaran masuk dari Midtrans.");
+          }
+        }
+      } catch {
+        if (!silent) {
+          toast.error("Gagal memeriksa status pembayaran.");
+        }
+      } finally {
+        isCheckingRef.current = false;
+        if (!silent) setCheckingStatus(false);
+      }
+    },
+    [pendingQris, resetCart, loadMasterData, broadcastDisplaySync]
+  );
+
+  // Auto-detector: Otomatis polling ke Midtrans setiap 2 detik saat QRIS aktif
   useEffect(() => {
     if (!pendingQris) return;
+
+    const timer = setInterval(() => {
+      checkQrisStatus(true);
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [pendingQris, checkQrisStatus]);
+
+  // Real-time synchronization (Pusher + BroadcastChannel + LocalStorage)
+  useEffect(() => {
+    if (!pendingQris) return;
+
+    const handlePaid = (orderData?: unknown) => {
+      toast.success(
+        `Pembayaran QRIS ${pendingQris.invoiceNumber} (${pendingQris.customerName}) LUNAS!`
+      );
+      setPendingQris(null);
+      resetCart();
+      loadMasterData();
+      if (orderData) {
+        broadcastDisplaySync({ action: "ORDER_PAID", order: orderData });
+      }
+    };
 
     const pusher = getPusherClient();
     const channel = pusher.subscribe(PUSHER_CHANNEL);
@@ -257,21 +366,47 @@ export default function PosPage() {
       PUSHER_EVENT_DISPLAY_UPDATE,
       (payload: { type: string; orderId?: string }) => {
         if (payload.type === "ORDER_PAID" && payload.orderId === pendingQris.id) {
-          setSuccessMsg(
-            `Pembayaran QRIS ${pendingQris.invoiceNumber} (${pendingQris.customerName}) LUNAS!`
-          );
-          setPendingQris(null);
-          resetCart();
-          loadMasterData();
+          handlePaid();
         }
       }
     );
 
+    let bc: BroadcastChannel | null = null;
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      bc = new BroadcastChannel("tricoins-pos-sync");
+      bc.onmessage = (event) => {
+        if (
+          event.data?.type === "ORDER_DISPLAY_SYNC" &&
+          event.data?.action === "ORDER_PAID" &&
+          (!event.data?.order || event.data?.order?.id === pendingQris.id)
+        ) {
+          handlePaid();
+        }
+      };
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "tricoins_display_sync" && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (
+            parsed.action === "ORDER_PAID" &&
+            (!parsed.order || parsed.order?.id === pendingQris.id)
+          ) {
+            handlePaid();
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+
     return () => {
       channel.unbind_all();
       pusher.unsubscribe(PUSHER_CHANNEL);
+      bc?.close();
+      window.removeEventListener("storage", handleStorage);
     };
-  }, [pendingQris, loadMasterData, resetCart]);
+  }, [pendingQris, loadMasterData, resetCart, broadcastDisplaySync]);
 
   function toggleService(s: Service) {
     setServiceConfigs((prev) => {
@@ -424,11 +559,8 @@ export default function PosPage() {
   }, [summary, customerName, productCart, products]);
 
   async function handleCheckout() {
-    setErrorMsg("");
-    setSuccessMsg("");
-
     if (!customerName.trim()) {
-      setErrorMsg("Nama pelanggan wajib diisi.");
+      toast.error("Nama pelanggan wajib diisi.");
       return;
     }
 
@@ -439,7 +571,7 @@ export default function PosPage() {
     });
 
     if (hasIncompleteService) {
-      setErrorMsg("Lengkapi berat (kg) atau jumlah lembar pada layanan yang dipilih.");
+      toast.error("Lengkapi berat (kg) atau jumlah lembar pada layanan yang dipilih.");
       return;
     }
 
@@ -454,12 +586,12 @@ export default function PosPage() {
     }));
 
     if (serviceItems.length === 0 && productItems.length === 0) {
-      setErrorMsg("Pilih minimal 1 layanan atau sachet.");
+      toast.error("Pilih minimal 1 layanan atau sachet.");
       return;
     }
 
     if (paymentMethod === "CASH" && cashNum < summary.totalAmount) {
-      setErrorMsg("Uang tunai yang diterima kurang.");
+      toast.error("Uang tunai yang diterima kurang.");
       return;
     }
 
@@ -479,21 +611,22 @@ export default function PosPage() {
       });
       const data = await safeJsonParse(res);
       if (!res.ok) {
-        setErrorMsg(data.error || "Gagal memproses transaksi");
+        toast.error(data.error || "Gagal memproses transaksi");
         return;
       }
 
       if (paymentMethod === "CASH") {
-        setSuccessMsg(
+        toast.success(
           `Transaksi ${data.order?.invoiceNumber || ""} LUNAS (Cash). Kembalian: ${formatRupiah(
             data.order?.cashChange || 0
           )}`
         );
         resetCart();
         loadMasterData();
+        broadcastDisplaySync({ action: "ORDER_PAID", order: data.order });
       } else {
         if (!data.order) {
-          setErrorMsg("Gagal membuat data pembayaran QRIS.");
+          toast.error("Gagal membuat data pembayaran QRIS.");
           return;
         }
         setPendingQris({
@@ -502,36 +635,17 @@ export default function PosPage() {
           customerName: data.order.customerName,
           totalAmount: data.order.totalAmount,
         });
+        broadcastDisplaySync({ action: "QRIS_CREATED", order: data.order });
       }
     } catch {
-      setErrorMsg("Terjadi kesalahan saat menghubungi server.");
+      toast.error("Terjadi kesalahan saat menghubungi server.");
     } finally {
       setSubmitting(false);
     }
   }
 
   async function handleCheckStatus() {
-    if (!pendingQris) return;
-    try {
-      const res = await fetch(`/api/orders/${pendingQris.id}/check-status`);
-      const data = await safeJsonParse(res);
-      if (data.order?.paymentStatus === "PAID") {
-        setSuccessMsg(`Pembayaran QRIS ${pendingQris.invoiceNumber} LUNAS!`);
-        setPendingQris(null);
-        resetCart();
-        loadMasterData();
-      } else if (
-        data.order?.paymentStatus === "EXPIRED" ||
-        data.order?.paymentStatus === "CANCELLED"
-      ) {
-        setErrorMsg("QRIS kedaluwarsa/dibatalkan.");
-        setPendingQris(null);
-      } else {
-        setErrorMsg("Belum ada pembayaran masuk dari Midtrans.");
-      }
-    } catch {
-      setErrorMsg("Gagal memeriksa status pembayaran.");
-    }
+    await checkQrisStatus(false);
   }
 
   async function handleCancelQris() {
@@ -542,44 +656,30 @@ export default function PosPage() {
       // Ignore network error
     }
     setPendingQris(null);
-    setErrorMsg("QRIS dibatalkan. Anda bisa ganti ke Cash atau buat ulang.");
+    broadcastDisplaySync({ action: "DISPLAY_CLEARED" });
+    toast.info("QRIS dibatalkan. Anda bisa ganti ke Cash atau buat ulang.");
   }
 
   return (
     <AppShell>
       <div className="space-y-5">
-        {successMsg && (
-          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center justify-between text-sm font-medium animate-content-swap">
-            <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-              {successMsg}
-            </span>
-            <button type="button" onClick={() => setSuccessMsg("")} className="p-1 text-emerald-700 hover:text-emerald-900">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 flex items-center justify-between text-sm font-medium animate-content-swap">
-            <span className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-              {errorMsg}
-            </span>
-            <button type="button" onClick={() => setErrorMsg("")} className="p-1 text-red-600 hover:text-red-800">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
         {pendingQris && (
-          <div className="p-4 rounded-sm bg-gradient-to-r from-blue-50 to-indigo-50/70 border border-blue-200 flex flex-wrap items-center justify-between gap-4 animate-content-swap">
-            <div>
-              <p className="font-semibold text-sm text-slate-900">
-                Menunggu Pembayaran QRIS ·{" "}
-                <span className="font-mono text-blue-600">{pendingQris.invoiceNumber}</span>
-              </p>
-              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+          <div className="p-4 rounded-md bg-gradient-to-r from-blue-50 to-indigo-50/70 border border-blue-200 flex flex-wrap items-center justify-between gap-4 animate-content-swap">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <p className="font-semibold text-sm text-slate-900">
+                  Menunggu Pembayaran QRIS ·{" "}
+                  <span className="font-mono text-blue-600">{pendingQris.invoiceNumber}</span>
+                </p>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-100/90 text-blue-700 border border-blue-200/80">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-500 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600"></span>
+                  </span>
+                  Detektor otomatis aktif
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 tabular-nums">
                 {pendingQris.customerName} · Total{" "}
                 <strong className="text-slate-900">{formatRupiah(pendingQris.totalAmount)}</strong> · Ditampilkan di Layar Pelanggan
               </p>
@@ -588,14 +688,25 @@ export default function PosPage() {
               <button
                 type="button"
                 onClick={handleCheckStatus}
-                className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-sm text-xs font-semibold shadow-sm shadow-blue-600/20 transition-all cursor-pointer"
+                disabled={checkingStatus}
+                className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 text-white rounded-md text-xs font-semibold shadow-sm shadow-blue-600/20 transition-all cursor-pointer flex items-center gap-1.5"
               >
-                Cek Status Midtrans
+                {checkingStatus ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Mengecek...</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Cek Manual</span>
+                  </>
+                )}
               </button>
               <button
                 type="button"
                 onClick={handleCancelQris}
-                className="px-3.5 py-2 bg-white border border-slate-200 text-red-600 rounded-sm text-xs font-semibold hover:bg-red-50 transition-colors cursor-pointer"
+                className="px-3.5 py-2 bg-white border border-slate-200 text-red-600 rounded-md text-xs font-semibold hover:bg-red-50 transition-colors cursor-pointer"
               >
                 Batalkan / Ganti Cash
               </button>

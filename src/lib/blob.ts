@@ -17,10 +17,27 @@ export function normalizeUploadFolder(raw?: string | null): UploadFolder {
 export function isVercelBlobUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return (
+    if (
       parsed.hostname.endsWith(".public.blob.vercel-storage.com") ||
       parsed.hostname.endsWith(".blob.vercel-storage.com")
-    );
+    ) {
+      return true;
+    }
+
+    // Support local vercel-blob-emulator (e.g. localhost:3100)
+    const emulatorUrl = process.env.VERCEL_BLOB_API_URL;
+    if (emulatorUrl) {
+      try {
+        const emulatorParsed = new URL(emulatorUrl);
+        if (parsed.host === emulatorParsed.host) {
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return parsed.host === "localhost:3100" || parsed.host === "127.0.0.1:3100";
   } catch {
     return false;
   }

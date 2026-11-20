@@ -174,6 +174,7 @@ export default function CustomerDisplayPage() {
   const [currentTime, setCurrentTime] = useState<string>("");
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [copied, setCopied] = useState(false);
+  const dismissedPaidOrderIdRef = useRef<string | null>(null);
 
   const qrisDebugLink =
     activeOrder?.qrisUrl ||
@@ -213,7 +214,25 @@ export default function CustomerDisplayPage() {
       const data = JSON.parse(text);
       setServices(data.services || []);
       setProducts(data.products || []);
-      setActiveOrder(data.activeOrder || null);
+
+      if (data.activeOrder) {
+        if (
+          data.activeOrder.paymentStatus === "PAID" &&
+          data.activeOrder.id === dismissedPaidOrderIdRef.current
+        ) {
+          setActiveOrder(null);
+        } else {
+          setActiveOrder((prev) => {
+            if (prev?.id === data.activeOrder.id && prev?.paymentStatus === "PAID") {
+              return prev;
+            }
+            return data.activeOrder;
+          });
+        }
+      } else {
+        setActiveOrder(null);
+      }
+
       if (data.liveCart) {
         setLiveCart(data.liveCart);
       }
@@ -222,21 +241,51 @@ export default function CustomerDisplayPage() {
     }
   }, []);
 
+  // 1. Sinkronisasi instan via BroadcastChannel & localStorage (0ms antar-tab/layar)
   useEffect(() => {
-    if (typeof window === "undefined" || !("BroadcastChannel" in window)) return;
+    if (typeof window === "undefined") return;
 
-    const bc = new BroadcastChannel("tricoins-pos-sync");
-    bc.onmessage = (event) => {
-      if (event.data?.type === "CART_SYNC") {
-        setLiveCart(event.data.cart || null);
+    let bc: BroadcastChannel | null = null;
+    if ("BroadcastChannel" in window) {
+      bc = new BroadcastChannel("tricoins-pos-sync");
+      bc.onmessage = (event) => {
+        if (event.data?.type === "CART_SYNC") {
+          setLiveCart(event.data.cart || null);
+        } else if (event.data?.type === "ORDER_DISPLAY_SYNC") {
+          if (event.data.action === "DISPLAY_CLEARED") {
+            setActiveOrder(null);
+          } else if (event.data.order) {
+            setActiveOrder(event.data.order);
+            setLiveCart(null);
+          }
+          fetchDisplayData();
+        }
+      };
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "tricoins_display_sync" && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed.action === "DISPLAY_CLEARED") {
+            setActiveOrder(null);
+          } else if (parsed.order) {
+            setActiveOrder(parsed.order);
+            setLiveCart(null);
+          }
+          fetchDisplayData();
+        } catch {}
       }
     };
+    window.addEventListener("storage", handleStorage);
 
     return () => {
-      bc.close();
+      bc?.close();
+      window.removeEventListener("storage", handleStorage);
     };
-  }, []);
+  }, [fetchDisplayData]);
 
+  // 2. Pusher WebSocket Listener (untuk tablet pelanggan via jaringan)
   useEffect(() => {
     const initTimer = setTimeout(() => {
       fetchDisplayData();
@@ -267,20 +316,42 @@ export default function CustomerDisplayPage() {
     };
   }, [fetchDisplayData]);
 
+  // 3. Polling background (fallback otomatis setiap 1.5 detik agar QRIS & update pembayaran
+  // selalu muncul otomatis tanpa perlu refresh, baik di dual monitor maupun tablet)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchDisplayData();
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [fetchDisplayData]);
+
+  const handlePaidAnimationEnd = useCallback(() => {
+    if (activeOrder) {
+      dismissedPaidOrderIdRef.current = activeOrder.id;
+    }
+    setActiveOrder(null);
+  }, [activeOrder]);
+
+  // 4. Progress bar 2 detik saat pembayaran sudah masuk, lalu kembali ke tampilan biasa
   useEffect(() => {
     if (activeOrder?.paymentStatus === "PAID") {
-      const clearTimer = setTimeout(() => {
+      const orderId = activeOrder.id;
+      const clearCartTimer = setTimeout(() => {
         setLiveCart(null);
       }, 0);
+
       const timer = setTimeout(() => {
+        dismissedPaidOrderIdRef.current = orderId;
         setActiveOrder(null);
-      }, 8000);
+      }, 2000);
+
       return () => {
-        clearTimeout(clearTimer);
+        clearTimeout(clearCartTimer);
         clearTimeout(timer);
       };
     }
-  }, [activeOrder]);
+  }, [activeOrder?.id, activeOrder?.paymentStatus]);
 
   useEffect(() => {
     if (!activeOrder || activeOrder.paymentStatus !== "PENDING" || !activeOrder.qrisExpiredAt) {
@@ -552,11 +623,25 @@ export default function CustomerDisplayPage() {
           <div key={rightPanelKey} className="h-full flex flex-col justify-between animate-content-swap">
           {activeOrder?.paymentStatus === "PAID" ? (
             <div className="h-full flex flex-col justify-between">
-              <div className="px-5 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 text-white flex items-center gap-3 shrink-0">
-                <CheckCircle2 className="w-6 h-6 text-white shrink-0" />
-                <div>
-                  <div className="text-[11px] font-medium text-emerald-100">Pembayaran Lunas</div>
-                  <h3 className="text-base font-semibold text-white">Terima Kasih</h3>
+              <div className="px-5 py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white flex flex-col gap-2 shrink-0">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-6 h-6 text-white shrink-0" />
+                    <div>
+                      <div className="text-[11px] font-medium text-emerald-100">Pembayaran Lunas</div>
+                      <h3 className="text-base font-semibold text-white">Terima Kasih</h3>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-100/90 bg-emerald-700/60 px-2 py-0.5 rounded-sm">
+                    2s
+                  </span>
+                </div>
+                {/* Progress bar sepanjang 2 detik */}
+                <div className="w-full bg-emerald-900/40 h-1.5 overflow-hidden rounded-full">
+                  <div
+                    className="h-full bg-white rounded-full animate-paid-countdown"
+                    onAnimationEnd={handlePaidAnimationEnd}
+                  />
                 </div>
               </div>
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { RefreshCw, Search } from "lucide-react";
 import { AppShell, AuthUser } from "@/components/AppShell";
 import { formatDateTime, formatRupiah } from "@/lib/format";
@@ -103,17 +104,34 @@ export default function OrdersPage() {
   }, [orders, statusFilter, searchQuery]);
 
   async function handleCheckStatus(id: string) {
-    await fetch(`/api/orders/${id}/check-status`);
+    try {
+      const res = await fetch(`/api/orders/${id}/check-status`);
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (data.order?.paymentStatus === "PAID") {
+        toast.success(`Transaksi ${data.order.invoiceNumber} LUNAS!`);
+      } else {
+        toast.info(`Status transaksi: ${data.order?.paymentStatus || "PENDING"}`);
+      }
+    } catch {
+      toast.error("Gagal memeriksa status order.");
+    }
     loadOrders();
   }
 
   async function handleVoid(id: string, invoice: string) {
     if (!confirm(`Void transaksi ${invoice}? Stok sachet akan dikembalikan.`)) return;
-    const res = await fetch(`/api/orders/${id}/void`, { method: "POST" });
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/orders/${id}/void`, { method: "POST" });
       const text = await res.text();
       const data = text ? JSON.parse(text) : {};
-      alert(data.error || "Gagal void");
+      if (!res.ok) {
+        toast.error(data.error || "Gagal void transaksi");
+      } else {
+        toast.success(`Transaksi ${invoice} berhasil di-void.`);
+      }
+    } catch {
+      toast.error("Gagal menghubungi server untuk void transaksi.");
     }
     loadOrders();
   }

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { AlertCircle, ArrowRight, Coins, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
@@ -25,12 +26,16 @@ export default function LoginPage() {
       const text = await res.text();
       const data = text ? JSON.parse(text) : {};
       if (!res.ok) {
-        setError(data.error || "Login gagal");
+        const msg = data.error || "Login gagal";
+        setError(msg);
+        toast.error(msg);
         return;
       }
+      toast.success(`Selamat datang, ${data.user?.name || "User"}!`);
       router.replace(data.user?.role === "OWNER" ? "/dashboard" : "/pos");
     } catch {
       setError("Terjadi kesalahan jaringan");
+      toast.error("Terjadi kesalahan jaringan");
     } finally {
       setLoading(false);
     }

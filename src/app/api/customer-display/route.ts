@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getActiveCustomerCart, getOrderQrisUrl } from "@/lib/pusher";
+import { getActiveCustomerCart, getOrderQrisUrl, notifyDisplayUpdate } from "@/lib/pusher";
+import { getMidtransStatus } from "@/lib/midtrans";
+import { settleQrisOrder } from "@/lib/order-service";
 
 export async function GET() {
   try {
@@ -36,6 +38,36 @@ export async function GET() {
           data: { paymentStatus: PaymentStatus.EXPIRED, isOnDisplay: false },
         });
         activeOrder = null;
+      }
+
+      // Detektor otomatis: Jika ada order PENDING di layar, cek status langsung ke Midtrans
+      if (
+        activeOrder &&
+        activeOrder.paymentStatus === PaymentStatus.PENDING &&
+        activeOrder.midtransOrderId
+      ) {
+        try {
+          const mtStatus = await getMidtransStatus(activeOrder.midtransOrderId);
+          const txStatus = mtStatus?.transaction_status;
+          if (txStatus === "settlement" || txStatus === "capture") {
+            const settled = await settleQrisOrder(activeOrder.id);
+            if (settled) {
+              activeOrder = settled;
+            }
+          } else if (txStatus === "expire" || txStatus === "cancel" || txStatus === "deny") {
+            activeOrder = await prisma.order.update({
+              where: { id: activeOrder.id },
+              data: {
+                paymentStatus: txStatus === "expire" ? PaymentStatus.EXPIRED : PaymentStatus.CANCELLED,
+                isOnDisplay: false,
+              },
+              include: { services: true, products: true },
+            });
+            await notifyDisplayUpdate({ type: "DISPLAY_CLEARED", orderId: activeOrder.id });
+          }
+        } catch (detectorErr) {
+          console.warn("Auto-detector Midtrans warning di customer-display:", detectorErr);
+        }
       }
 
       // Jika sudah PAID lebih dari 15 detik, jangan tampilkan lagi saat browser di-refresh

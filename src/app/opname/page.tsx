@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, EyeOff, Plus, X } from "lucide-react";
+import { toast } from "sonner";
+import { EyeOff, Plus } from "lucide-react";
 import { AppShell, AuthUser } from "@/components/AppShell";
 import { formatDateTime } from "@/lib/format";
 
@@ -32,8 +33,6 @@ export default function OpnamePage() {
   const [inputs, setInputs] = useState<Record<string, { physical: string; notes: string }>>({});
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
 
   const isOwner = user?.role === "OWNER";
   const effectiveBlindCount = !isOwner || blindCount;
@@ -96,19 +95,18 @@ export default function OpnamePage() {
 
   async function handleStartOpname() {
     setLoading(true);
-    setErrorMsg("");
     try {
       const res = await fetch("/api/opname", { method: "POST" });
       const text = await res.text();
       const data = text ? JSON.parse(text) : {};
       if (!res.ok) {
-        setErrorMsg(data.error || "Gagal memulai sesi opname.");
+        toast.error(data.error || "Gagal memulai sesi opname.");
         setLoading(false);
         return;
       }
-      setSuccessMsg("Sesi opname baru berhasil dimulai.");
+      toast.success("Sesi opname baru berhasil dimulai.");
     } catch {
-      setErrorMsg("Terjadi kesalahan saat menghubungi server.");
+      toast.error("Terjadi kesalahan saat menghubungi server.");
     }
     await loadData();
     setLoading(false);
@@ -117,8 +115,6 @@ export default function OpnamePage() {
   async function handleSave(submit: boolean) {
     if (!activeOpname) return;
     setLoading(true);
-    setErrorMsg("");
-    setSuccessMsg("");
     const items = activeOpname.items.map((item) => ({
       id: item.id,
       physicalStock:
@@ -135,16 +131,16 @@ export default function OpnamePage() {
       if (!res.ok) {
         const text = await res.text();
         const data = text ? JSON.parse(text) : {};
-        setErrorMsg(data.error || "Gagal menyimpan opname.");
+        toast.error(data.error || "Gagal menyimpan opname.");
       } else {
-        setSuccessMsg(
+        toast.success(
           submit
             ? "Opname berhasil disubmit. Menunggu approval owner."
             : "Data opname berhasil disimpan."
         );
       }
     } catch {
-      setErrorMsg("Terjadi kesalahan saat menyimpan.");
+      toast.error("Terjadi kesalahan saat menyimpan.");
     }
     await loadData();
     setLoading(false);
@@ -154,19 +150,17 @@ export default function OpnamePage() {
     if (!activeOpname) return;
     if (!confirm("Setujui opname dan sesuaikan stok sistem dengan hasil fisik?")) return;
     setLoading(true);
-    setErrorMsg("");
-    setSuccessMsg("");
     try {
       const res = await fetch(`/api/opname/${activeOpname.id}/approve`, { method: "POST" });
       const text = await res.text();
       const data = text ? JSON.parse(text) : {};
       if (!res.ok) {
-        setErrorMsg(data.error || "Gagal approve opname.");
+        toast.error(data.error || "Gagal approve opname.");
       } else {
-        setSuccessMsg("Opname berhasil di-approve. Stok sistem sudah disesuaikan.");
+        toast.success("Opname berhasil di-approve. Stok sistem sudah disesuaikan.");
       }
     } catch {
-      setErrorMsg("Terjadi kesalahan saat approve.");
+      toast.error("Terjadi kesalahan saat approve.");
     }
     await loadData();
     setLoading(false);
@@ -191,30 +185,6 @@ export default function OpnamePage() {
             </button>
           )}
         </div>
-
-        {successMsg && (
-          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              {successMsg}
-            </span>
-            <button type="button" onClick={() => setSuccessMsg("")} className="text-emerald-600 hover:text-emerald-800 ml-4">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-              {errorMsg}
-            </span>
-            <button type="button" onClick={() => setErrorMsg("")} className="text-red-500 hover:text-red-700 ml-4">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
         {activeOpname && (
           <div className="bg-white rounded-sm border border-slate-200/90 overflow-hidden animate-content-swap">

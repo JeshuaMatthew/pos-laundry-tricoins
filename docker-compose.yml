@@ -17,5 +17,29 @@ services:
       timeout: 5s
       retries: 5
 
+  vercel-blob:
+    image: ghcr.io/payloadcms/vercel-blob-emulator:latest
+    container_name: vercel-blob
+    restart: always
+    ports:
+      - "3100:3000"
+    environment:
+      EMULATOR_BASE_URL: "http://localhost:3100"
+    volumes:
+      - vercel_blob_data:/data
+
+  pusher-local:
+    image: quay.io/soketi/soketi:1.6-16-debian
+    container_name: pusher-local
+    restart: always
+    ports:
+      - "6001:6001"
+    environment:
+      SOKETI_DEFAULT_APP_ID: "tricoins-app"
+      SOKETI_DEFAULT_APP_KEY: "tricoins-key"
+      SOKETI_DEFAULT_APP_SECRET: "tricoins-secret"
+      SOKETI_DEBUG: "1"
+
 volumes:
   neon_local_data:
+  vercel_blob_data:

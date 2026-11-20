@@ -93,6 +93,19 @@ body {
   will-change: transform;
 }
 
+@keyframes paidCountdown {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.animate-paid-countdown {
+  animation: paidCountdown 2000ms linear forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-page-enter,
   .animate-content-swap,

@@ -56,6 +56,10 @@ export async function settleQrisOrder(orderId: string) {
   const result = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
       where: { id: orderId },
+      include: {
+        services: true,
+        products: true,
+      },
     });
 
     if (!order) return null;

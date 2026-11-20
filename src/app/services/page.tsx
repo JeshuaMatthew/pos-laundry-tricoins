@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
-  Check,
   Edit2,
   ImageIcon,
   MoreVertical,
@@ -42,8 +42,6 @@ async function parseJsonSafe(res: Response) {
 export default function ServicesPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
 
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -70,7 +68,7 @@ export default function ServicesPage() {
       const data = await parseJsonSafe(res);
       setServices(data.services || []);
     } catch {
-      setErrorMsg("Gagal memuat daftar layanan.");
+      toast.error("Gagal memuat daftar layanan.");
     } finally {
       setLoading(false);
     }
@@ -84,7 +82,7 @@ export default function ServicesPage() {
         if (active) setServices(data.services || []);
       })
       .catch(() => {
-        if (active) setErrorMsg("Gagal memuat daftar layanan.");
+        if (active) toast.error("Gagal memuat daftar layanan.");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -192,8 +190,6 @@ export default function ServicesPage() {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
-    setErrorMsg("");
-    setSuccessMsg("");
 
     const payload = {
       name: formName.trim(),
@@ -215,7 +211,7 @@ export default function ServicesPage() {
         });
         const data = await parseJsonSafe(res);
         if (!res.ok) throw new Error(data.error || "Gagal memperbarui layanan");
-        setSuccessMsg(`Layanan "${formName}" berhasil diperbarui.`);
+        toast.success(`Layanan "${formName}" berhasil diperbarui.`);
       } else {
         const res = await fetch("/api/services", {
           method: "POST",
@@ -224,13 +220,13 @@ export default function ServicesPage() {
         });
         const data = await parseJsonSafe(res);
         if (!res.ok) throw new Error(data.error || "Gagal menambahkan layanan");
-        setSuccessMsg(`Layanan "${formName}" berhasil ditambahkan.`);
+        toast.success(`Layanan "${formName}" berhasil ditambahkan.`);
       }
 
       setIsModalOpen(false);
       await loadServices();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Terjadi kesalahan.");
+      toast.error(err instanceof Error ? err.message : "Terjadi kesalahan.");
     } finally {
       setSubmitting(false);
     }
@@ -244,10 +240,10 @@ export default function ServicesPage() {
       const res = await fetch(`/api/services/${s.id}`, { method: "DELETE" });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(data.error || "Gagal menghapus layanan");
-      setSuccessMsg(data.message || `Layanan "${s.name}" berhasil dihapus.`);
+      toast.success(data.message || `Layanan "${s.name}" berhasil dihapus.`);
       await loadServices();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Gagal menghapus layanan.");
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus layanan.");
     }
   }
 
@@ -261,32 +257,13 @@ export default function ServicesPage() {
       });
       await loadServices();
     } catch {
-      setErrorMsg("Gagal mengubah status layanan.");
+      toast.error("Gagal mengubah status layanan.");
     }
   }
 
   return (
     <AppShell ownerOnly>
       <div className="space-y-5">
-        {successMsg && (
-          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span className="flex items-center gap-2">
-              <Check className="w-4 h-4 shrink-0" /> {successMsg}
-            </span>
-            <button type="button" onClick={() => setSuccessMsg("")}>
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span>{errorMsg}</span>
-            <button type="button" onClick={() => setErrorMsg("")}>
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">

@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
-  Check,
   Droplets,
   Edit2,
   ImageIcon,
@@ -68,8 +68,6 @@ export default function ProductsPage() {
   const [selected, setSelected] = useState<Product | null>(null);
   const [movements, setMovements] = useState<Movement[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("ALL");
 
@@ -105,7 +103,7 @@ export default function ProductsPage() {
       const data = await parseJsonSafe(res);
       setProducts(data.products || []);
     } catch {
-      setErrorMsg("Gagal memuat produk.");
+      toast.error("Gagal memuat produk.");
     } finally {
       setLoading(false);
     }
@@ -119,7 +117,7 @@ export default function ProductsPage() {
         if (active) setProducts(data.products || []);
       })
       .catch(() => {
-        if (active) setErrorMsg("Gagal memuat produk.");
+        if (active) toast.error("Gagal memuat produk.");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -251,8 +249,6 @@ export default function ProductsPage() {
   async function handleSaveProduct(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
-    setErrorMsg("");
-    setSuccessMsg("");
 
     try {
       if (editingProduct) {
@@ -273,7 +269,7 @@ export default function ProductsPage() {
         });
         const data = await parseJsonSafe(res);
         if (!res.ok) throw new Error(data.error || "Gagal memperbarui sachet");
-        setSuccessMsg(`Sachet "${formName}" berhasil diperbarui.`);
+        toast.success(`Sachet "${formName}" berhasil diperbarui.`);
       } else {
         const res = await fetch("/api/products", {
           method: "POST",
@@ -292,13 +288,13 @@ export default function ProductsPage() {
         });
         const data = await parseJsonSafe(res);
         if (!res.ok) throw new Error(data.error || "Gagal membuat sachet");
-        setSuccessMsg(`Sachet "${formName}" berhasil ditambahkan.`);
+        toast.success(`Sachet "${formName}" berhasil ditambahkan.`);
       }
 
       setIsModalOpen(false);
       await loadProducts();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Terjadi kesalahan.");
+      toast.error(err instanceof Error ? err.message : "Terjadi kesalahan.");
     } finally {
       setSubmitting(false);
     }
@@ -312,11 +308,11 @@ export default function ProductsPage() {
       const res = await fetch(`/api/products/${p.id}`, { method: "DELETE" });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(data.error || "Gagal menghapus sachet");
-      setSuccessMsg(data.message || `Sachet "${p.name}" berhasil dihapus.`);
+      toast.success(data.message || `Sachet "${p.name}" berhasil dihapus.`);
       if (selected?.id === p.id) setSelected(null);
       await loadProducts();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Gagal menghapus sachet.");
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus sachet.");
     }
   }
 
@@ -330,7 +326,7 @@ export default function ProductsPage() {
       });
       await loadProducts();
     } catch {
-      setErrorMsg("Gagal mengubah status produk.");
+      toast.error("Gagal mengubah status produk.");
     }
   }
 
@@ -355,37 +351,18 @@ export default function ProductsPage() {
 
       setStockQty("");
       setStockNotes("");
-      setSuccessMsg(`Stok ${selected.name} berhasil diperbarui.`);
+      toast.success(`Stok ${selected.name} berhasil diperbarui.`);
       await loadProducts();
       const updatedSelected = data.product || selected;
       await openHistory(updatedSelected);
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Gagal mengubah stok.");
+      toast.error(err instanceof Error ? err.message : "Gagal mengubah stok.");
     }
   }
 
   return (
     <AppShell ownerOnly>
       <div className="space-y-5">
-        {successMsg && (
-          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span className="flex items-center gap-2">
-              <Check className="w-4 h-4 shrink-0" /> {successMsg}
-            </span>
-            <button type="button" onClick={() => setSuccessMsg("")}>
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span>{errorMsg}</span>
-            <button type="button" onClick={() => setErrorMsg("")}>
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">

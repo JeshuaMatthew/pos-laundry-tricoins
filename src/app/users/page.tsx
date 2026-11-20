@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
-  Check,
   Edit2,
   Eye,
   EyeOff,
@@ -42,8 +42,6 @@ export default function UsersPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("ALL");
@@ -74,7 +72,7 @@ export default function UsersPage() {
       setUsers(data.users || []);
       if (data.currentUserId) setCurrentUserId(data.currentUserId);
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Gagal memuat pengguna.");
+      toast.error(err instanceof Error ? err.message : "Gagal memuat pengguna.");
     } finally {
       setLoading(false);
     }
@@ -96,7 +94,7 @@ export default function UsersPage() {
       })
       .catch((err: unknown) => {
         if (active) {
-          setErrorMsg(err instanceof Error ? err.message : "Gagal memuat pengguna.");
+          toast.error(err instanceof Error ? err.message : "Gagal memuat pengguna.");
         }
       })
       .finally(() => {
@@ -171,8 +169,6 @@ export default function UsersPage() {
     e.preventDefault();
     setSubmitting(true);
     setModalError("");
-    setErrorMsg("");
-    setSuccessMsg("");
 
     try {
       if (editingUser) {
@@ -189,7 +185,7 @@ export default function UsersPage() {
         });
         const data = await parseJsonSafe(res);
         if (!res.ok) throw new Error(data.error || "Gagal memperbarui pengguna");
-        setSuccessMsg(`Akun "${formName.trim()}" berhasil diperbarui.`);
+        toast.success(`Akun "${formName.trim()}" berhasil diperbarui.`);
       } else {
         const res = await fetch("/api/users", {
           method: "POST",
@@ -203,7 +199,7 @@ export default function UsersPage() {
         });
         const data = await parseJsonSafe(res);
         if (!res.ok) throw new Error(data.error || "Gagal menambahkan pengguna");
-        setSuccessMsg(`Akun "${formName.trim()}" berhasil ditambahkan.`);
+        toast.success(`Akun "${formName.trim()}" berhasil ditambahkan.`);
       }
 
       setIsModalOpen(false);
@@ -217,8 +213,6 @@ export default function UsersPage() {
 
   async function toggleActive(u: UserRecord) {
     setActiveMenuId(null);
-    setErrorMsg("");
-    setSuccessMsg("");
 
     try {
       const res = await fetch(`/api/users/${u.id}`, {
@@ -228,25 +222,23 @@ export default function UsersPage() {
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(data.error || "Gagal mengubah status pengguna");
-      setSuccessMsg(
+      toast.success(
         `Akun "${u.name}" ${!u.isActive ? "diaktifkan" : "dinonaktifkan"}.`
       );
       await loadUsers();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Gagal mengubah status pengguna.");
+      toast.error(err instanceof Error ? err.message : "Gagal mengubah status pengguna.");
     }
   }
 
   async function executeDelete() {
     if (!confirmDeleteUser) return;
     if (confirmDeleteUser.id === currentUserId) {
-      setErrorMsg("Tidak dapat menghapus akun yang sedang digunakan.");
+      toast.error("Tidak dapat menghapus akun yang sedang digunakan.");
       setConfirmDeleteUser(null);
       return;
     }
     setDeleting(true);
-    setErrorMsg("");
-    setSuccessMsg("");
 
     try {
       const res = await fetch(`/api/users/${confirmDeleteUser.id}`, {
@@ -254,11 +246,11 @@ export default function UsersPage() {
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(data.error || "Gagal menghapus pengguna");
-      setSuccessMsg(data.message || `Pengguna "${confirmDeleteUser.name}" dihapus.`);
+      toast.success(data.message || `Pengguna "${confirmDeleteUser.name}" dihapus.`);
       setConfirmDeleteUser(null);
       await loadUsers();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Gagal menghapus pengguna.");
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus pengguna.");
       setConfirmDeleteUser(null);
     } finally {
       setDeleting(false);
@@ -268,25 +260,6 @@ export default function UsersPage() {
   return (
     <AppShell ownerOnly>
       <div className="space-y-5">
-        {successMsg && (
-          <div className="px-4 py-3 rounded-sm bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span className="flex items-center gap-2">
-              <Check className="w-4 h-4 shrink-0" /> {successMsg}
-            </span>
-            <button type="button" onClick={() => setSuccessMsg("")} className="cursor-pointer">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="px-4 py-3 rounded-sm bg-red-50 border border-red-200 text-red-700 text-sm font-medium flex items-center justify-between animate-content-swap">
-            <span>{errorMsg}</span>
-            <button type="button" onClick={() => setErrorMsg("")} className="cursor-pointer">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">

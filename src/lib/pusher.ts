@@ -57,10 +57,31 @@ function createPusherServer(): Pusher | null {
   const appId = process.env.PUSHER_APP_ID;
   const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const secret = process.env.PUSHER_SECRET;
-  const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+  const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER || "mt1";
+  const host = process.env.PUSHER_HOST;
+  const port = process.env.PUSHER_PORT;
+  const useTLS = process.env.PUSHER_USE_TLS === "true";
 
-  if (!appId || !key || !secret || !cluster) {
+  if (
+    !appId ||
+    !key ||
+    !secret ||
+    appId === "xxxx" ||
+    key === "xxxx" ||
+    secret === "xxxx"
+  ) {
     return null;
+  }
+
+  if (host) {
+    return new Pusher({
+      appId,
+      key,
+      secret,
+      host,
+      port: port || undefined,
+      useTLS,
+    });
   }
 
   return new Pusher({
